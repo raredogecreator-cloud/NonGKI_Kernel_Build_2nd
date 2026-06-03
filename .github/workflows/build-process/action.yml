@@ -101,7 +101,10 @@ runs:
             echo "======================"
 
             if [[ "${{ env.BASEBAND_GUARD_ENABLE }}" == "true" ]]; then
-                make -j$(nproc --all) CC="ccache clang" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} O=out ARCH="${{ env.KERNEL_ARCH }}" security/selinux/
+                # tee to error.log: this pre-build runs BEFORE the main (teed)
+                # build, so without this a failure here leaves no error.log and
+                # the BUILD_DEBUGGER artifact is empty.
+                make -j$(nproc --all) CC="ccache clang" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} O=out ARCH="${{ env.KERNEL_ARCH }}" security/selinux/ 2>&1 | tee error.log
                 echo "[+] Pre-built SELinux done."
             fi
 
@@ -112,7 +115,9 @@ runs:
             echo "===================="
 
             if [[ "${{ env.BASEBAND_GUARD_ENABLE }}" == "true" ]]; then
-                make -j$(nproc --all) O=out ARCH="${{ env.KERNEL_ARCH }}" security/selinux/
+                # tee to error.log (see clang branch above): capture pre-build
+                # failures that occur before the main teed build.
+                make -j$(nproc --all) O=out ARCH="${{ env.KERNEL_ARCH }}" security/selinux/ 2>&1 | tee error.log
                 echo "[+] Pre-built SELinux done."
             fi
 
