@@ -15,14 +15,16 @@ env:
   #    defaults these to $(CROSS_COMPILE)* = ancient Google GCC-4.9 (2016)
   #    binutils, which mis-handle clang-19 output. Use the LLVM 19.1.7 tools
   #    (on PATH via clang-custom/bin) instead.
-  #  - CROSS_COMPILE=aarch64-linux-gnu- (and the arm32/compat prefixes):
-  #    overrides the Google-GCC prefix so the kernel Makefile's
-  #    `which $(CROSS_COMPILE)elfedit` resolves to the modern, triple-matching
-  #    binutils we install in the toolchain step, letting clang -no-integrated-as
-  #    use a real arm64 GNU `as`. (4.19 arm64 asm — e.g. the vdso — is written
-  #    for GAS; LLVM's integrated assembler cannot build it.) make CLI vars
-  #    override the env CROSS_COMPILE the harness exports.
-  EXTRA_CMDS : "LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip READELF=llvm-readelf CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE_COMPAT=arm-linux-gnueabi-"
+  #  - CROSS_COMPILE points at the private /tmp/cc{64,32} dirs built in the
+  #    toolchain step. The kernel Makefile derives GCC_TOOLCHAIN_DIR from
+  #    `which $(CROSS_COMPILE)elfedit` and passes --prefix=<dir> to clang;
+  #    clang -no-integrated-as then runs getProgramPath("as") = <dir>/as. In
+  #    those dirs the BARE `as` is the arm64/arm32 GNU cross assembler (in
+  #    /usr/bin bare `as` is the host x86 one, which rejects "-EL"). 4.19 arm64
+  #    asm (e.g. the vdso) is GAS-only — LLVM's integrated assembler can't build
+  #    it — so we need a real GNU as. make CLI vars override the env the harness
+  #    exports.
+  EXTRA_CMDS : "LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip READELF=llvm-readelf CROSS_COMPILE=/tmp/cc64/aarch64-linux-gnu- CROSS_COMPILE_ARM32=/tmp/cc32/arm-linux-gnueabi- CROSS_COMPILE_COMPAT=/tmp/cc32/arm-linux-gnueabi-"
 
   KERNEL_SOURCE : "https://github.com/OnePlusOSS/android_kernel_oneplus_sm8250.git"
   KERNEL_BRANCH : "oneplus/SM8250_R_11.0"
@@ -150,21 +152,32 @@ jobs:
       - name: 🩹 Toolchain setup & compat fixes (GNU cross-as + host dtc)
         shell: bash
         run: |
-          # Modern, triple-matching GNU assembler. 4.19 arm64 is built
-          # clang + external GNU `as` (LLVM's integrated assembler cannot
-          # build this tree's hand-written asm, e.g. vdso note.S/gettimeofday.S
-          # which use GAS-only macro/section syntax). CLANG_TRIPLE is
-          # aarch64-linux-gnu-, so install the matching binutils; with
-          # CROSS_COMPILE=aarch64-linux-gnu- (set in EXTRA_CMDS) the kernel
-          # Makefile resolves GCC_TOOLCHAIN_DIR via `which aarch64-linux-gnu-elfedit`
-          # and clang -no-integrated-as picks up /usr/bin/aarch64-linux-gnu-as.
-          # (The earlier "/usr/bin/as: unrecognized option '-EL'" was clang
-          # falling back to the host x86 as because the GCC-4.9 prefix had no
-          # elfedit -> empty toolchain dir.) arm32 covers CONFIG_COMPAT_VDSO.
+          # 4.19 arm64 is built clang + external GNU `as` (LLVM's integrated
+          # assembler cannot build this tree's hand-written asm, e.g. vdso
+          # note.S/gettimeofday.S which use GAS-only macro/section syntax).
+          # Install modern, triple-matching binutils.
           sudo apt-get update -y
           sudo apt-get install -y binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
-          aarch64-linux-gnu-as --version | head -1
-          arm-linux-gnueabi-as --version | head -1
+
+          # Private cross-tool dirs whose BARE `as` is the GNU cross assembler.
+          # Why: the kernel Makefile passes --prefix=$(dir `which $(CROSS_COMPILE)elfedit`)
+          # to clang, and clang -no-integrated-as runs getProgramPath("as") =
+          # <prefix>/as. Ubuntu installs the cross tools in /usr/bin only under
+          # triple names (aarch64-linux-gnu-as); bare /usr/bin/as is the HOST x86
+          # assembler, which rejects "-EL". Pointing CROSS_COMPILE at these dirs
+          # makes --prefix resolve here, so <prefix>/as is the real cross as.
+          # Symlink both bare and triple names (clang may use either form).
+          build_cc_dir() { # $1=dir  $2=triple-prefix
+            mkdir -p "$1"
+            for t in as ld ar nm objcopy objdump ranlib strip readelf elfedit addr2line size strings; do
+              s=$(command -v "$2$t" || true)
+              { [ -n "$s" ] && ln -sf "$s" "$1/$t" && ln -sf "$s" "$1/$2$t"; } || true
+            done
+            echo "== $1 =="; ls -l "$1"
+          }
+          build_cc_dir /tmp/cc64 aarch64-linux-gnu-
+          build_cc_dir /tmp/cc32 arm-linux-gnueabi-
+          echo "bare as resolves to:"; /tmp/cc64/as --version | head -1
 
           cd "$GITHUB_WORKSPACE/device_kernel"
 
