@@ -251,6 +251,23 @@ jobs:
           find . \( -name Makefile -o -name Kbuild \) -print0 | xargs -0 -r sed -i -E 's/-Werror([[:space:]]|$)/\1/g'
           echo "remaining blanket -Werror:"; grep -rlE '\-Werror([[:space:]]|$)' --include=Makefile --include=Kbuild . 2>/dev/null | wc -l || true
 
+          # --- vmlinux LINK-stage fixes for LLVM-19 / ld.lld on this 4.19 tree ---
+          # (a) stpcpy: clang-19's optimizer synthesizes stpcpy() libcalls (from
+          #     strcpy()+return-end patterns in apparmor/lsm.c, tty_io.c, ...) that
+          #     4.19 doesn't define -> "ld.lld: undefined symbol: stpcpy". Mark
+          #     stpcpy/stpncpy as non-builtins so clang stops emitting them (no
+          #     source change). Appended after $(KCFLAGS) so it sticks in KBUILD_CFLAGS.
+          sed -i '/\$(KCFLAGS)/a KBUILD_CFLAGS += -fno-builtin-stpcpy -fno-builtin-stpncpy' Makefile
+          echo "stpcpy guard:"; grep -n 'fno-builtin-stpcpy' Makefile || true
+          # (b) modversions CRC: with CONFIG_MODVERSIONS=y, every EXPORT_SYMBOL emits
+          #     a __crc_<sym> in ___kcrctab via R_AARCH64_ABS32, which lld-19 rejects
+          #     in the PIE vmlinux link ("cannot be used against symbol ...; recompile
+          #     with -fPIC"). Disable module CRC versioning -> removes the entire
+          #     __crc_ class at once. In-tree modules are unaffected; vermagic still
+          #     guards module loading.
+          sed -i 's/^CONFIG_MODVERSIONS=y/# CONFIG_MODVERSIONS is not set/' arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "modversions:"; grep -n 'MODVERSIONS' arch/arm64/configs/${{ env.DEFCONFIG_NAME }} || true
+
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
 
