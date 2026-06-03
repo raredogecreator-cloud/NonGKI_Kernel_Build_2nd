@@ -135,20 +135,34 @@ jobs:
       - name: 🔒 Patch Kernel of Baseband Guard
         uses: ./.github/workflows/patch-baseband-guard
 
-      - name: 🩹 Fix host dtc yylloc (GCC10+ -fno-common)
+      - name: 🩹 Toolchain compat fixes (host dtc + clang integrated-as)
         shell: bash
         run: |
-          # Linux 4.19's scripts/dtc/dtc-lexer.l has a tentative
-          # "YYLTYPE yylloc;" that collides with the dtc-parser definition
-          # under modern host GCC's -fno-common default, breaking the HOSTLD
-          # of scripts/dtc/dtc ("multiple definition of 'yylloc'"). Mark it
-          # extern. No .lex.c_shipped in this tree, so patching the .l is
-          # enough (LEX regenerates the .lex.c during build).
           cd "$GITHUB_WORKSPACE/device_kernel"
+
+          # 1) Host dtc: Linux 4.19's scripts/dtc/dtc-lexer.l has a tentative
+          #    "YYLTYPE yylloc;" that collides with the dtc-parser definition
+          #    under modern host GCC's -fno-common default, breaking the HOSTLD
+          #    of scripts/dtc/dtc ("multiple definition of 'yylloc'"). Mark it
+          #    extern. No .lex.c_shipped in this tree, so patching the .l is
+          #    enough (LEX regenerates the .lex.c during build).
           DTC_LEXER="scripts/dtc/dtc-lexer.l"
-          echo "Before:"; grep -n 'YYLTYPE yylloc;' "$DTC_LEXER" || true
+          echo "dtc before:"; grep -n 'YYLTYPE yylloc;' "$DTC_LEXER" || true
           sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/' "$DTC_LEXER"
-          echo "After:"; grep -n 'yylloc;' "$DTC_LEXER" || true
+          echo "dtc after:"; grep -n 'yylloc;' "$DTC_LEXER" || true
+
+          # 2) clang assembler: this tree's top Makefile hard-codes
+          #    "CLANG_FLAGS += -no-integrated-as", forcing an external GAS.
+          #    GCC_TOOLCHAIN_DIR is derived from `which $(CROSS_COMPILE)elfedit`,
+          #    which the Google GCC-4.9 prebuilt does not provide, so --prefix=
+          #    resolves empty and clang falls back to the host /usr/bin/as. That
+          #    x86 assembler rejects the arm64 "-EL" flag:
+          #      /usr/bin/as: unrecognized option '-EL'  (scripts/mod/empty.o)
+          #    Force clang's integrated assembler (clang 19 supports arm64 IAS),
+          #    eliminating the external-as dependency entirely. Single match.
+          echo "Makefile before:"; grep -n 'no-integrated-as' Makefile || true
+          sed -i 's/-no-integrated-as/-integrated-as/' Makefile
+          echo "Makefile after:"; grep -n 'integrated-as' Makefile || true
 
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
