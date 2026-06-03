@@ -10,26 +10,19 @@ env:
   DEVICE_CODENAME : "instantnoodle"
 
   CUSTOM_CMDS : "BRAND_SHOW_FLAG=oneplus CLANG_TRIPLE=aarch64-linux-gnu-"
-  # Coherent clang + LLVM-binutils + GNU-assembler toolchain.
-  #  - LD=ld.lld, AR/NM/OBJCOPY/OBJDUMP/STRIP/READELF=llvm-*: this 4.19 tree
-  #    defaults these to $(CROSS_COMPILE)* = ancient Google GCC-4.9 (2016)
-  #    binutils, which mis-handle clang-19 output. Use the LLVM 19.1.7 tools
-  #    (on PATH via clang-custom/bin) instead.
-  #  - CROSS_COMPILE points at the private /tmp/cc{64,32} dirs built in the
-  #    toolchain step. The kernel Makefile derives GCC_TOOLCHAIN_DIR from
-  #    `which $(CROSS_COMPILE)elfedit` and passes --prefix=<dir> to clang;
-  #    clang -no-integrated-as then runs getProgramPath("as") = <dir>/as. In
-  #    those dirs the BARE `as` is the arm64/arm32 GNU cross assembler (in
-  #    /usr/bin bare `as` is the host x86 one, which rejects "-EL"). 4.19 arm64
-  #    asm (e.g. the vdso) is GAS-only — LLVM's integrated assembler can't build
-  #    it — so we need a real GNU as. make CLI vars override the env the harness
-  #    exports.
-  #  - KCFLAGS=-Wno-error: this 4.19 code was written for ~clang-12; clang-19
-  #    promotes many legacy constructs to errors via the tree's global
-  #    -Werror=strict-prototypes / -Werror=implicit-* (Makefile ~L942-954).
-  #    $(KCFLAGS) is appended after those, so a blanket -Wno-error demotes them
-  #    back to warnings tree-wide (no per-file patching). Hard errors are
-  #    unaffected.
+  # Toolchain make vars (Proton clang 13 provides clang + LLVM tools + its own
+  # GNU binutils, all on PATH via clang-custom/bin).
+  #  - LD=ld.lld, AR/NM/OBJCOPY/OBJDUMP/STRIP/READELF=llvm-*: use Proton's LLVM
+  #    tools rather than the tree default $(CROSS_COMPILE)* (these link cleanly).
+  #  - CROSS_COMPILE=aarch64-linux-gnu- (+ arm32/compat): resolves INSIDE Proton
+  #    -- it bundles bin/aarch64-linux-gnu-as/-elfedit and a bare bin/as -- so
+  #    clang -no-integrated-as uses Proton's own validated assembler for the
+  #    GAS-only 4.19 asm (vdso etc.), exactly like the reference build. No host
+  #    /usr/bin/as fallback, no Ubuntu-binutils shim.
+  #  - KCFLAGS=-Wno-error: the tree promotes legacy constructs to errors via
+  #    global -Werror=strict-prototypes / -Werror=implicit-* (Makefile ~L942-954);
+  #    blanket -Wno-error (appended after) demotes them tree-wide. (The specific
+  #    -Werror=<w> are also converted to -Wno-error=<w> in the toolchain step.)
   EXTRA_CMDS : "LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip READELF=llvm-readelf CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- KCFLAGS=-Wno-error"
 
   # lateautumn233's maintained OnePlus 8-series OOS11 tree. Stock OOS11 base
