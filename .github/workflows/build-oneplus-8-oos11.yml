@@ -41,8 +41,14 @@ env:
   KERNEL_SOURCE : "https://github.com/lateautumn233/android_kernel_oneplus_sm8250.git"
   KERNEL_BRANCH : "oneplus/SM8250_R_11.0"
 
-  CLANG_SOURCE : "https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/LLVM-19.1.7-Linux-X64.tar.xz"
-  CLANG_BRANCH : ""
+  # Proton clang 13 (20210522) -- the native/validated toolchain for the SM8250
+  # 4.19 tree (the reference build-kernel.yml uses this exact ref). LLVM 19 merely
+  # *linked* this legacy tree under a stack of shims; clang-13 is what these
+  # kernels are known to BOOT with. Switched after the raw-Image format audit
+  # cleared packaging as the black-screen cause. build-env installs libtinfo5
+  # (proton-13 needs libtinfo.so.5) and clones .git refs to clang-custom.
+  CLANG_SOURCE : "https://github.com/kdrag0n/proton-clang.git"
+  CLANG_BRANCH : "20210522"
 
   GCC_GNU : false
   GCC_64_SOURCE : "https://github.com/JackA1ltman/Google-GCC-Android-4.9.git"
@@ -261,22 +267,11 @@ jobs:
           find . \( -name Makefile -o -name Kbuild \) -print0 | xargs -0 -r sed -i -E 's/-Werror([[:space:]]|$)/\1/g'
           echo "remaining blanket -Werror:"; grep -rlE '\-Werror([[:space:]]|$)' --include=Makefile --include=Kbuild . 2>/dev/null | wc -l || true
 
-          # --- vmlinux LINK-stage fixes for LLVM-19 / ld.lld on this 4.19 tree ---
-          # (a) stpcpy: clang-19's optimizer synthesizes stpcpy() libcalls (from
-          #     strcpy()+return-end patterns in apparmor/lsm.c, tty_io.c, ...) that
-          #     4.19 doesn't define -> "ld.lld: undefined symbol: stpcpy". Mark
-          #     stpcpy/stpncpy as non-builtins so clang stops emitting them (no
-          #     source change). Appended after $(KCFLAGS) so it sticks in KBUILD_CFLAGS.
-          sed -i '/\$(KCFLAGS)/a KBUILD_CFLAGS += -fno-builtin-stpcpy -fno-builtin-stpncpy' Makefile
-          echo "stpcpy guard:"; grep -n 'fno-builtin-stpcpy' Makefile || true
-          # (b) modversions CRC: with CONFIG_MODVERSIONS=y, every EXPORT_SYMBOL emits
-          #     a __crc_<sym> in ___kcrctab via R_AARCH64_ABS32, which lld-19 rejects
-          #     in the PIE vmlinux link ("cannot be used against symbol ...; recompile
-          #     with -fPIC"). Disable module CRC versioning -> removes the entire
-          #     __crc_ class at once. In-tree modules are unaffected; vermagic still
-          #     guards module loading.
-          sed -i 's/^CONFIG_MODVERSIONS=y/# CONFIG_MODVERSIONS is not set/' arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
-          echo "modversions:"; grep -n 'MODVERSIONS' arch/arm64/configs/${{ env.DEFCONFIG_NAME }} || true
+          # NOTE: the clang-19 link shims (-fno-builtin-stpcpy and the
+          # CONFIG_MODVERSIONS disable) were removed with the move to Proton
+          # clang 13 -- clang-13 does not synthesize the stpcpy libcall, and
+          # ld.lld-13 does not reject the modversions __crc_ ABS32 relocations,
+          # so MODVERSIONS stays =y (from the defconfig) as on stock.
 
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
