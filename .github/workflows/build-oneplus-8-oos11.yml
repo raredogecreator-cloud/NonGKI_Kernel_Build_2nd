@@ -203,6 +203,18 @@ jobs:
           sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/' "$DTC_LEXER"
           echo "dtc after:"; grep -n 'yylloc;' "$DTC_LEXER" || true
 
+          # cpuset: ppajda's tree adds a CONFIG_CPUSET_ASSIST feature whose
+          # `struct cs_target` (and its uses) are #ifdef-guarded, but the helper
+          # cpuset_write_resmask_assist() — which takes that struct BY VALUE — is
+          # left OUTSIDE the guard. With kona-perf_defconfig (CPUSET_ASSIST off)
+          # the struct is undefined there: "variable has incomplete type
+          # 'struct cs_target'". The function is only ever called from inside the
+          # existing #ifdef CONFIG_CPUSET_ASSIST block, so guard its definition
+          # too (makes the file compile whether the feature is on or off).
+          echo "cpuset before:"; grep -n 'cpuset_write_resmask_assist' kernel/cgroup/cpuset.c || true
+          perl -0777 -i -pe 's/(static ssize_t cpuset_write_resmask_assist\(.*?\n\}\n)/#ifdef CONFIG_CPUSET_ASSIST\n${1}#endif\n/s' kernel/cgroup/cpuset.c
+          echo "cpuset after:"; grep -n 'CONFIG_CPUSET_ASSIST\|cpuset_write_resmask_assist' kernel/cgroup/cpuset.c | head
+
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
 
