@@ -51,7 +51,11 @@ env:
   GCC_32_BRANCH : "arm32"
 
   DEFCONFIG_SOURCE: ""
-  DEFCONFIG_NAME : "vendor/kona-perf_defconfig"
+  # The kernel's OWN defconfig (savedefconfig with STUNE_ASSIST=y, CPUSET_ASSIST=y
+  # + cpuset masks, etc.) -- the config the maintainer actually builds & boots.
+  # Generic vendor/kona-perf lacked STUNE_ASSIST/CPUSET_ASSIST, which is what
+  # broke tune.c and cpuset.c (config-gated wrappers used but not defined).
+  DEFCONFIG_NAME : "radioactive_defconfig"
   DEFCONFIG_ORIGIN_IMAGE: ""
   DEFCONFIG_FROM_BOOT: false
 
@@ -160,6 +164,11 @@ jobs:
           echo "CONFIG_LTO_NONE=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           echo "CONFIG_INIT_STACK_NONE=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           echo "CONFIG_BUILD_ARM64_DT_OVERLAY=n" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          # Force RAW uncompressed Image: radioactive_defconfig defaults to GZIP
+          # (Image.gz), but the stock 8 Pro boot.img (v2) carries a raw Image and
+          # our MKBOOTIMG repack feeds the kernel as-is -> must be raw to boot.
+          echo "# CONFIG_BUILD_ARM64_KERNEL_COMPRESSION_GZIP is not set" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_BUILD_ARM64_UNCOMPRESSED_KERNEL=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           # echo "CONFIG_KPROBES=n" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           sed -i 's/# CONFIG_SECCOMP is not set/CONFIG_SECCOMP=y/' ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
 
