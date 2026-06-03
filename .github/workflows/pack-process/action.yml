@@ -104,6 +104,16 @@ runs:
           TIME=$(date +"%Y%m%d%H%M%S")
           FORMAT_MKBOOTING=$(echo `mkboottools/unpack_bootimg.py --boot_img=boot_source_${{ env.DEVICE_NAME }}.img --format mkbootimg`)
 
+          # Black-screen debug insurance: append generic early-logging flags to
+          # the stock cmdline (kept intact) so the kernel logs to console/pstore
+          # as early as possible. No guessed UART base -- a wrong
+          # msm_geni_serial,0x... base can hang; bare "earlycon" uses the DT
+          # chosen console. Injected before the closing quote of --cmdline so
+          # both repack paths below pick it up. No-op if there is no --cmdline.
+          echo "cmdline before: $FORMAT_MKBOOTING"
+          FORMAT_MKBOOTING=$(echo "$FORMAT_MKBOOTING" | sed -E "s/(--cmdline ['\"][^'\"]*)/\1 earlycon keep_bootcon printk.devkmsg=on ignore_loglevel/")
+          echo "cmdline after:  $FORMAT_MKBOOTING"
+
           mkdir -p tmp
 
           mkboottools/unpack_bootimg.py --boot_img boot_source_${{ env.DEVICE_NAME }}.img
