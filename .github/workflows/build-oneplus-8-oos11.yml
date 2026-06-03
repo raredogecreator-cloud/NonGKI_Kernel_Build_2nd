@@ -25,14 +25,15 @@ env:
   #    -Werror=<w> are also converted to -Wno-error=<w> in the toolchain step.)
   EXTRA_CMDS : "LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip READELF=llvm-readelf CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- KCFLAGS=-Wno-error"
 
-  # lateautumn233's maintained OnePlus 8-series OOS11 tree. Stock OOS11 base
-  # (branch tip matches OnePlusOSS R_11.0); susfs is NOT pre-integrated, so the
-  # kona_oos/susfs_fixed patches partially reject -- that is EXPECTED on a stock
-  # tree and we hand-resolve each .rej against THIS tree rather than switching
-  # source. kona-perf is this tree's native defconfig (so the ppajda-specific
-  # WALT/cpuset/smack untested-path breaks should not recur here).
-  KERNEL_SOURCE : "https://github.com/lateautumn233/android_kernel_oneplus_sm8250.git"
-  KERNEL_BRANCH : "oneplus/SM8250_R_11.0"
+  # Radioactive kernel for OnePlus 8 series -- a real, daily-flashed, KNOWN-
+  # BOOTING OOS11 (Android R) kernel, unlike the raw OnePlusOSS OSS drop (which
+  # didn't boot even bare). Branch release_r = Linux 4.19.113, OnePlus 8/8 Pro,
+  # has vendor/kona-perf_defconfig, no KSU/susfs pre-integrated. release_r is the
+  # target_commitish of releases V2.0.x/V2.1.x (incl. V2.0.7). Using it to verify
+  # our build+pack pipeline can produce a booting kernel from a proven source;
+  # KSU/SUSFS layered back on once the bare pipeline is confirmed.
+  KERNEL_SOURCE : "https://github.com/acuicultor/Radioactive_kernel_oneplus8.git"
+  KERNEL_BRANCH : "release_r"
 
   # Proton clang 13 (20210522) -- the native/validated toolchain for the SM8250
   # 4.19 tree (the reference build-kernel.yml uses this exact ref). LLVM 19 merely
