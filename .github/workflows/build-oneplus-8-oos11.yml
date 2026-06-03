@@ -228,6 +228,19 @@ jobs:
           fi
           echo "namei.c susfs include:"; grep -n 'susfs_def.h' fs/namei.c || true
 
+          # clang-19 vs 4.19 legacy code: the tree promotes several warnings to
+          # HARD errors via specific -Werror=<w> (Makefile ~427,942-954:
+          # strict-prototypes, implicit-int, implicit-function-declaration,
+          # date-time, incompatible-pointer-types, designated-init). A blanket
+          # KCFLAGS=-Wno-error does NOT override a specific -Werror=<w> (only
+          # -Wno-error=<w> does), which is why e.g. ftsIO.c's K&R getClient()
+          # still failed. Convert every -Werror=<w> -> -Wno-error=<w> at the
+          # source so the whole class is demoted tree-wide (this also covers
+          # clang-16+ default-error implicit-int / implicit-function-declaration).
+          echo "Werror before:"; grep -nE '\-Werror' Makefile || true
+          sed -i 's/-Werror=/-Wno-error=/g; s/-Werror-implicit-function-declaration/-Wno-error=implicit-function-declaration/g' Makefile
+          echo "Werror after:"; grep -nE '\-W(no-)?error' Makefile || true
+
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
 
