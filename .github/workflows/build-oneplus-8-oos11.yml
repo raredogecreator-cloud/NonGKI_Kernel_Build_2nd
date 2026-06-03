@@ -189,7 +189,7 @@ jobs:
           }
           build_cc_dir /tmp/cc64 aarch64-linux-gnu-
           build_cc_dir /tmp/cc32 arm-linux-gnueabi-
-          echo "bare as resolves to:"; /tmp/cc64/as --version | head -1
+          echo "bare as resolves to:"; /tmp/cc64/as --version 2>/dev/null | head -1 || true
 
           cd "$GITHUB_WORKSPACE/device_kernel"
 
@@ -213,7 +213,7 @@ jobs:
           # too (makes the file compile whether the feature is on or off).
           echo "cpuset before:"; grep -n 'cpuset_write_resmask_assist' kernel/cgroup/cpuset.c || true
           perl -0777 -i -pe 's/(static ssize_t cpuset_write_resmask_assist\(.*?\n\}\n)/#ifdef CONFIG_CPUSET_ASSIST\n${1}#endif\n/s' kernel/cgroup/cpuset.c
-          echo "cpuset after:"; grep -n 'CONFIG_CPUSET_ASSIST\|cpuset_write_resmask_assist' kernel/cgroup/cpuset.c | head
+          echo "cpuset after:"; grep -n 'CONFIG_CPUSET_ASSIST\|cpuset_write_resmask_assist' kernel/cgroup/cpuset.c | head || true
 
           # SUSFS reject #1 (fs/namei.c): the base susfs patch's hunk #1 (adding
           # "#include <linux/susfs_def.h>") rejects on this tree because OnePlus
