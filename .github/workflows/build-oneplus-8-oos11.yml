@@ -135,6 +135,21 @@ jobs:
       - name: 🔒 Patch Kernel of Baseband Guard
         uses: ./.github/workflows/patch-baseband-guard
 
+      - name: 🩹 Fix host dtc yylloc (GCC10+ -fno-common)
+        shell: bash
+        run: |
+          # Linux 4.19's scripts/dtc/dtc-lexer.l has a tentative
+          # "YYLTYPE yylloc;" that collides with the dtc-parser definition
+          # under modern host GCC's -fno-common default, breaking the HOSTLD
+          # of scripts/dtc/dtc ("multiple definition of 'yylloc'"). Mark it
+          # extern. No .lex.c_shipped in this tree, so patching the .l is
+          # enough (LEX regenerates the .lex.c during build).
+          cd "$GITHUB_WORKSPACE/device_kernel"
+          DTC_LEXER="scripts/dtc/dtc-lexer.l"
+          echo "Before:"; grep -n 'YYLTYPE yylloc;' "$DTC_LEXER" || true
+          sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/' "$DTC_LEXER"
+          echo "After:"; grep -n 'yylloc;' "$DTC_LEXER" || true
+
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
 
