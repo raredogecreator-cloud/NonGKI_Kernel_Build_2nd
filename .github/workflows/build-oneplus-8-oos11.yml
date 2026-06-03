@@ -30,7 +30,7 @@ env:
   #    $(KCFLAGS) is appended after those, so a blanket -Wno-error demotes them
   #    back to warnings tree-wide (no per-file patching). Hard errors are
   #    unaffected.
-  EXTRA_CMDS : "LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip READELF=llvm-readelf CROSS_COMPILE=/tmp/cc64/aarch64-linux-gnu- CROSS_COMPILE_ARM32=/tmp/cc32/arm-linux-gnueabi- CROSS_COMPILE_COMPAT=/tmp/cc32/arm-linux-gnueabi- KCFLAGS=-Wno-error"
+  EXTRA_CMDS : "LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip READELF=llvm-readelf CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- KCFLAGS=-Wno-error"
 
   # lateautumn233's maintained OnePlus 8-series OOS11 tree. Stock OOS11 base
   # (branch tip matches OnePlusOSS R_11.0); susfs is NOT pre-integrated, so the
@@ -190,35 +190,18 @@ jobs:
       - name: 🔒 Patch Kernel of Baseband Guard
         uses: ./.github/workflows/patch-baseband-guard
 
-      - name: 🩹 Toolchain setup & compat fixes (GNU cross-as + host dtc)
+      - name: 🩹 Toolchain compat fixes (host dtc + tree patches)
         shell: bash
         run: |
-          # 4.19 arm64 is built clang + external GNU `as` (LLVM's integrated
-          # assembler cannot build this tree's hand-written asm, e.g. vdso
-          # note.S/gettimeofday.S which use GAS-only macro/section syntax).
-          # Install modern, triple-matching binutils.
-          sudo apt-get update -y
-          sudo apt-get install -y binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
-
-          # Private cross-tool dirs whose BARE `as` is the GNU cross assembler.
-          # Why: the kernel Makefile passes --prefix=$(dir `which $(CROSS_COMPILE)elfedit`)
-          # to clang, and clang -no-integrated-as runs getProgramPath("as") =
-          # <prefix>/as. Ubuntu installs the cross tools in /usr/bin only under
-          # triple names (aarch64-linux-gnu-as); bare /usr/bin/as is the HOST x86
-          # assembler, which rejects "-EL". Pointing CROSS_COMPILE at these dirs
-          # makes --prefix resolve here, so <prefix>/as is the real cross as.
-          # Symlink both bare and triple names (clang may use either form).
-          build_cc_dir() { # $1=dir  $2=triple-prefix
-            mkdir -p "$1"
-            for t in as ld ar nm objcopy objdump ranlib strip readelf elfedit addr2line size strings; do
-              s=$(command -v "$2$t" || true)
-              { [ -n "$s" ] && ln -sf "$s" "$1/$t" && ln -sf "$s" "$1/$2$t"; } || true
-            done
-            echo "== $1 =="; ls -l "$1"
-          }
-          build_cc_dir /tmp/cc64 aarch64-linux-gnu-
-          build_cc_dir /tmp/cc32 arm-linux-gnueabi-
-          echo "bare as resolves to:"; /tmp/cc64/as --version 2>/dev/null | head -1 || true
+          # Assembler: Proton clang 13 BUNDLES its own validated aarch64/arm32
+          # GNU binutils (bin/aarch64-linux-gnu-as, -elfedit, bare bin/as, ...),
+          # so with CROSS_COMPILE=aarch64-linux-gnu- (set in EXTRA_CMDS) and
+          # Proton on PATH, clang -no-integrated-as resolves to Proton's own `as`
+          # -- exactly the reference build-kernel.yml toolchain, no host fallback.
+          # The previous Ubuntu-binutils /tmp/cc64 shim (built for LLVM-19, which
+          # ships no binutils) was forcing a FOREIGN assembler on the early-boot
+          # asm and is removed -- that divergence is a prime suspect for the
+          # bare-kernel early panic.
 
           cd "$GITHUB_WORKSPACE/device_kernel"
 
