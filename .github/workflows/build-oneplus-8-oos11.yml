@@ -10,13 +10,19 @@ env:
   DEVICE_CODENAME : "instantnoodle"
 
   CUSTOM_CMDS : "BRAND_SHOW_FLAG=oneplus CLANG_TRIPLE=aarch64-linux-gnu-"
-  # Full LLVM toolchain. This 4.19 tree defaults AR/NM/OBJCOPY/OBJDUMP/STRIP to
-  # $(CROSS_COMPILE)* = the ancient Google GCC-4.9 (2016) binutils, which do not
-  # play nicely with clang-19 output and cause a cascade of host/link failures.
-  # Route every binutil to the LLVM 19.1.7 equivalents (on PATH via clang-custom/bin)
-  # so the toolchain is coherent. LD already uses ld.lld; the assembler is clang's
-  # integrated-as (see the toolchain-compat step).
-  EXTRA_CMDS : "LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip READELF=llvm-readelf"
+  # Coherent clang + LLVM-binutils + GNU-assembler toolchain.
+  #  - LD=ld.lld, AR/NM/OBJCOPY/OBJDUMP/STRIP/READELF=llvm-*: this 4.19 tree
+  #    defaults these to $(CROSS_COMPILE)* = ancient Google GCC-4.9 (2016)
+  #    binutils, which mis-handle clang-19 output. Use the LLVM 19.1.7 tools
+  #    (on PATH via clang-custom/bin) instead.
+  #  - CROSS_COMPILE=aarch64-linux-gnu- (and the arm32/compat prefixes):
+  #    overrides the Google-GCC prefix so the kernel Makefile's
+  #    `which $(CROSS_COMPILE)elfedit` resolves to the modern, triple-matching
+  #    binutils we install in the toolchain step, letting clang -no-integrated-as
+  #    use a real arm64 GNU `as`. (4.19 arm64 asm — e.g. the vdso — is written
+  #    for GAS; LLVM's integrated assembler cannot build it.) make CLI vars
+  #    override the env CROSS_COMPILE the harness exports.
+  EXTRA_CMDS : "LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip READELF=llvm-readelf CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE_COMPAT=arm-linux-gnueabi-"
 
   KERNEL_SOURCE : "https://github.com/OnePlusOSS/android_kernel_oneplus_sm8250.git"
   KERNEL_BRANCH : "oneplus/SM8250_R_11.0"
@@ -141,34 +147,36 @@ jobs:
       - name: 🔒 Patch Kernel of Baseband Guard
         uses: ./.github/workflows/patch-baseband-guard
 
-      - name: 🩹 Toolchain compat fixes (host dtc + clang integrated-as)
+      - name: 🩹 Toolchain setup & compat fixes (GNU cross-as + host dtc)
         shell: bash
         run: |
+          # Modern, triple-matching GNU assembler. 4.19 arm64 is built
+          # clang + external GNU `as` (LLVM's integrated assembler cannot
+          # build this tree's hand-written asm, e.g. vdso note.S/gettimeofday.S
+          # which use GAS-only macro/section syntax). CLANG_TRIPLE is
+          # aarch64-linux-gnu-, so install the matching binutils; with
+          # CROSS_COMPILE=aarch64-linux-gnu- (set in EXTRA_CMDS) the kernel
+          # Makefile resolves GCC_TOOLCHAIN_DIR via `which aarch64-linux-gnu-elfedit`
+          # and clang -no-integrated-as picks up /usr/bin/aarch64-linux-gnu-as.
+          # (The earlier "/usr/bin/as: unrecognized option '-EL'" was clang
+          # falling back to the host x86 as because the GCC-4.9 prefix had no
+          # elfedit -> empty toolchain dir.) arm32 covers CONFIG_COMPAT_VDSO.
+          sudo apt-get update -y
+          sudo apt-get install -y binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
+          aarch64-linux-gnu-as --version | head -1
+          arm-linux-gnueabi-as --version | head -1
+
           cd "$GITHUB_WORKSPACE/device_kernel"
 
-          # 1) Host dtc: Linux 4.19's scripts/dtc/dtc-lexer.l has a tentative
-          #    "YYLTYPE yylloc;" that collides with the dtc-parser definition
-          #    under modern host GCC's -fno-common default, breaking the HOSTLD
-          #    of scripts/dtc/dtc ("multiple definition of 'yylloc'"). Mark it
-          #    extern. No .lex.c_shipped in this tree, so patching the .l is
-          #    enough (LEX regenerates the .lex.c during build).
+          # Host dtc: 4.19's scripts/dtc/dtc-lexer.l has a tentative
+          # "YYLTYPE yylloc;" that collides with the dtc-parser definition under
+          # modern host GCC's -fno-common default (HOSTLD scripts/dtc/dtc:
+          # "multiple definition of 'yylloc'"). Mark it extern. No .lex.c_shipped
+          # in this tree, so patching the .l is enough (LEX regenerates the .lex.c).
           DTC_LEXER="scripts/dtc/dtc-lexer.l"
           echo "dtc before:"; grep -n 'YYLTYPE yylloc;' "$DTC_LEXER" || true
           sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/' "$DTC_LEXER"
           echo "dtc after:"; grep -n 'yylloc;' "$DTC_LEXER" || true
-
-          # 2) clang assembler: this tree's top Makefile hard-codes
-          #    "CLANG_FLAGS += -no-integrated-as", forcing an external GAS.
-          #    GCC_TOOLCHAIN_DIR is derived from `which $(CROSS_COMPILE)elfedit`,
-          #    which the Google GCC-4.9 prebuilt does not provide, so --prefix=
-          #    resolves empty and clang falls back to the host /usr/bin/as. That
-          #    x86 assembler rejects the arm64 "-EL" flag:
-          #      /usr/bin/as: unrecognized option '-EL'  (scripts/mod/empty.o)
-          #    Force clang's integrated assembler (clang 19 supports arm64 IAS),
-          #    eliminating the external-as dependency entirely. Single match.
-          echo "Makefile before:"; grep -n 'no-integrated-as' Makefile || true
-          sed -i 's/-no-integrated-as/-integrated-as/' Makefile
-          echo "Makefile after:"; grep -n 'integrated-as' Makefile || true
 
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
