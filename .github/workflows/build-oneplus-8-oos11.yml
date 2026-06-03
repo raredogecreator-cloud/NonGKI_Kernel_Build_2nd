@@ -64,13 +64,12 @@ env:
 
   KERNELSU_AUTO_GET : "true" # if u want easy setting kernelsu, u can true.
   KERNELSU_AUTO_FORK : "resukisu" # xxksu, rsuntk , next, resukisu and sukisu
-  # DIAGNOSTIC BISECT #2: bare kernel. Build #1 (susfs/bbg off, KSU on) still
-  # died -- but patch-no-kprobe still installed the KSU syscall hook. Gate ALL
-  # KSU integration (Set KernelSU + KSU defconfig + patch-no-kprobe hook) on this
-  # flag so we get a pure lateautumn233+kona-perf kernel with NO KSU/hooks.
-  # boots => KSU(resukisu)/hooks is the culprit; dead => base kernel/source/
-  # defconfig/toolchain-shims. Default-on for other devices (they don't set it).
-  KSU_INSTALL : "false"
+  # FEATURE STEP 1: KSU back ON (bare Radioactive+radioactive_defconfig confirmed
+  # booting fully). KSU_INSTALL gates all KSU integration (Set KernelSU + KSU
+  # defconfig + patch-no-kprobe syscall hook). SUSFS + baseband-guard stay OFF so
+  # KSU is the only variable: boots => add SUSFS next; dead => KSU/resukisu hooks
+  # are the problem on this base. Default-on for other devices (they don't set it).
+  KSU_INSTALL : "true"
 
   # DIAGNOSTIC BISECT #1: SUSFS off. Early-boot panic isolation -- toolchain
   # (clang 19 & 13) and packaging (raw Image) are ruled out, so we strip the
