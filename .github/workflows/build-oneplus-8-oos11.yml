@@ -267,11 +267,21 @@ jobs:
           find . \( -name Makefile -o -name Kbuild \) -print0 | xargs -0 -r sed -i -E 's/-Werror([[:space:]]|$)/\1/g'
           echo "remaining blanket -Werror:"; grep -rlE '\-Werror([[:space:]]|$)' --include=Makefile --include=Kbuild . 2>/dev/null | wc -l || true
 
-          # NOTE: the clang-19 link shims (-fno-builtin-stpcpy and the
-          # CONFIG_MODVERSIONS disable) were removed with the move to Proton
-          # clang 13 -- clang-13 does not synthesize the stpcpy libcall, and
-          # ld.lld-13 does not reject the modversions __crc_ ABS32 relocations,
-          # so MODVERSIONS stays =y (from the defconfig) as on stock.
+          # vmlinux LINK shims -- required for clang+lld on this 4.19 tree
+          # REGARDLESS of version. Confirmed: Proton clang-13/lld-13 hit the exact
+          # same two errors as clang-19, so these are NOT version-specific.
+          # (a) clang synthesizes a stpcpy() libcall (apparmor/lsm.c, tty_io.c)
+          #     that 4.19 doesn't define -> "ld.lld: undefined symbol: stpcpy".
+          #     Mark stpcpy/stpncpy non-builtin so clang stops emitting it.
+          sed -i '/\$(KCFLAGS)/a KBUILD_CFLAGS += -fno-builtin-stpcpy -fno-builtin-stpncpy' Makefile
+          echo "stpcpy guard:"; grep -n 'fno-builtin-stpcpy' Makefile || true
+          # (b) CONFIG_MODVERSIONS emits __crc_<sym> in ___kcrctab via
+          #     R_AARCH64_ABS32, which ld.lld rejects in the PIE vmlinux link
+          #     ("recompile with -fPIC"). Disable module CRC versioning -> drops
+          #     the whole __crc_ class. In-tree modules unaffected; vermagic
+          #     still guards loading.
+          sed -i 's/^CONFIG_MODVERSIONS=y/# CONFIG_MODVERSIONS is not set/' arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "modversions:"; grep -n 'MODVERSIONS' arch/arm64/configs/${{ env.DEFCONFIG_NAME }} || true
 
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
