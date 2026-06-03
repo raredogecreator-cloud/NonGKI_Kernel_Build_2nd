@@ -241,6 +241,16 @@ jobs:
           sed -i 's/-Werror=/-Wno-error=/g; s/-Werror-implicit-function-declaration/-Wno-error=implicit-function-declaration/g' Makefile
           echo "Werror after:"; grep -nE '\-W(no-)?error' Makefile || true
 
+          # Strip blanket per-directory -Werror. Some vendor dirs (e.g.
+          # drivers/vservices/*/Makefile: "ccflags-y += -Werror") add a blanket
+          # -Werror that is appended AFTER our -Wno-error= flags, re-promoting
+          # every warning to a hard error for that dir (vservices died on
+          # -Wunused-but-set-variable). Remove the standalone -Werror token
+          # tree-wide; -Werror=<w> is preserved (kept harmless by the demotion
+          # above). Removing -Werror only makes warnings non-fatal -> safe.
+          find . \( -name Makefile -o -name Kbuild \) -print0 | xargs -0 -r sed -i -E 's/-Werror([[:space:]]|$)/\1/g'
+          echo "remaining blanket -Werror:"; grep -rlE '\-Werror([[:space:]]|$)' --include=Makefile --include=Kbuild . 2>/dev/null | wc -l || true
+
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
 
