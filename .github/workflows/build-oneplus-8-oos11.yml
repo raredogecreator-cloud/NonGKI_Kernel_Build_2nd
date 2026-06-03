@@ -24,7 +24,13 @@ env:
   #    asm (e.g. the vdso) is GAS-only — LLVM's integrated assembler can't build
   #    it — so we need a real GNU as. make CLI vars override the env the harness
   #    exports.
-  EXTRA_CMDS : "LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip READELF=llvm-readelf CROSS_COMPILE=/tmp/cc64/aarch64-linux-gnu- CROSS_COMPILE_ARM32=/tmp/cc32/arm-linux-gnueabi- CROSS_COMPILE_COMPAT=/tmp/cc32/arm-linux-gnueabi-"
+  #  - KCFLAGS=-Wno-error: this 4.19 code was written for ~clang-12; clang-19
+  #    promotes many legacy constructs to errors via the tree's global
+  #    -Werror=strict-prototypes / -Werror=implicit-* (Makefile ~L942-954).
+  #    $(KCFLAGS) is appended after those, so a blanket -Wno-error demotes them
+  #    back to warnings tree-wide (no per-file patching). Hard errors are
+  #    unaffected.
+  EXTRA_CMDS : "LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip READELF=llvm-readelf CROSS_COMPILE=/tmp/cc64/aarch64-linux-gnu- CROSS_COMPILE_ARM32=/tmp/cc32/arm-linux-gnueabi- CROSS_COMPILE_COMPAT=/tmp/cc32/arm-linux-gnueabi- KCFLAGS=-Wno-error"
 
   KERNEL_SOURCE : "https://github.com/OnePlusOSS/android_kernel_oneplus_sm8250.git"
   KERNEL_BRANCH : "oneplus/SM8250_R_11.0"
