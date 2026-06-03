@@ -215,6 +215,19 @@ jobs:
           perl -0777 -i -pe 's/(static ssize_t cpuset_write_resmask_assist\(.*?\n\}\n)/#ifdef CONFIG_CPUSET_ASSIST\n${1}#endif\n/s' kernel/cgroup/cpuset.c
           echo "cpuset after:"; grep -n 'CONFIG_CPUSET_ASSIST\|cpuset_write_resmask_assist' kernel/cgroup/cpuset.c | head
 
+          # SUSFS reject #1 (fs/namei.c): the base susfs patch's hunk #1 (adding
+          # "#include <linux/susfs_def.h>") rejects on this tree because OnePlus
+          # inserted a "#ifdef CONFIG_FSC" block right after <linux/build_bug.h>.
+          # The other 20 namei.c hunks applied and use susfs_def.h macros
+          # (CONFIG_KSU_SUSFS_SUS_PATH/OPEN_REDIRECT are enabled), so the include
+          # is REQUIRED to compile. Re-add it after build_bug.h. (The other two
+          # rejects -- fdinfo.c hunk#4 and the namespace.c fixed-patch hunk -- are
+          # harmless: they leave only unused vars / unreferenced IDAs.)
+          if ! grep -q 'linux/susfs_def.h' fs/namei.c; then
+            perl -0777 -i -pe 's{(#include <linux/build_bug.h>\n)}{$1#if defined(CONFIG_KSU_SUSFS_SUS_PATH) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux/susfs_def.h>\n#endif\n}' fs/namei.c
+          fi
+          echo "namei.c susfs include:"; grep -n 'susfs_def.h' fs/namei.c || true
+
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
 
