@@ -32,14 +32,14 @@ env:
   #    unaffected.
   EXTRA_CMDS : "LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip READELF=llvm-readelf CROSS_COMPILE=/tmp/cc64/aarch64-linux-gnu- CROSS_COMPILE_ARM32=/tmp/cc32/arm-linux-gnueabi- CROSS_COMPILE_COMPAT=/tmp/cc32/arm-linux-gnueabi- KCFLAGS=-Wno-error"
 
-  # ppajda's tree is the native base the kona_oos/susfs_fixed patch set is
-  # tuned for; the official OnePlusOSS tree made susfs hunks reject (silently,
-  # via `patch ... || true`), leaving fs/namei.c referencing undefined SUSFS
-  # symbols. Keep the patch-compatible source; the panel/KPM hypotheses are
-  # addressed by DEFCONFIG_NAME (kona-perf) + KPM off, not by the source.
-  # Verified vendor/kona-perf_defconfig exists on ppajda oos11.
-  KERNEL_SOURCE : "https://github.com/ppajda/android_kernel_oneplus_sm8250.git"
-  KERNEL_BRANCH : "oos11"
+  # lateautumn233's maintained OnePlus 8-series OOS11 tree. Stock OOS11 base
+  # (branch tip matches OnePlusOSS R_11.0); susfs is NOT pre-integrated, so the
+  # kona_oos/susfs_fixed patches partially reject -- that is EXPECTED on a stock
+  # tree and we hand-resolve each .rej against THIS tree rather than switching
+  # source. kona-perf is this tree's native defconfig (so the ppajda-specific
+  # WALT/cpuset/smack untested-path breaks should not recur here).
+  KERNEL_SOURCE : "https://github.com/lateautumn233/android_kernel_oneplus_sm8250.git"
+  KERNEL_BRANCH : "oneplus/SM8250_R_11.0"
 
   CLANG_SOURCE : "https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/LLVM-19.1.7-Linux-X64.tar.xz"
   CLANG_BRANCH : ""
