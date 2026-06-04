@@ -333,5 +333,45 @@ jobs:
       - name: 🔩 Pack Process
         uses: ./.github/workflows/pack-process
 
+      - name: 🩹 Inject /data/adb FBE self-heal (fix set_policy_failed)
+        shell: bash
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          IMG="$PACK_NAME"
+          # On a freshly-wiped /data, KernelSU/ReSukiSU creates /data/adb before
+          # init applies the fscrypt policy -> OnePlus init aborts with boot
+          # reason "set_policy_failed:/data/adb" -> recovery loop. Provisioning
+          # /data/adb with encryption=DeleteIfNecessary makes init wipe+recreate
+          # it with the correct policy instead of crashing.
+          # Ref (verified): techie-s 2026-02 "fix set_policy_failed when tweaking KSU".
+          case "$IMG" in
+            *.img) : ;;
+            *) echo "PACK_NAME=$IMG is not a raw .img; skipping ramdisk patch"; exit 0 ;;
+          esac
+          echo "Patching ramdisk in $IMG"
+          curl -LSs -o magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+          unzip -o magisk.apk 'lib/x86_64/*' -d mx >/dev/null
+          MB="$PWD/magiskboot"; cp mx/lib/x86_64/libmagiskboot.so "$MB"; chmod +x "$MB"
+          rm -rf bp; mkdir bp; cp "$IMG" bp/boot.img; cd bp
+          "$MB" unpack boot.img
+          echo "=== ramdisk .rc layout (diagnostic) ==="
+          "$MB" cpio ramdisk.cpio "ls -r" 2>/dev/null | grep -iE 'init.*\.rc|(^|/)init(\.|$)' | head -60 || true
+          printf 'on post-fs-data\n    mkdir /data/adb 0700 root root encryption=DeleteIfNecessary\n' > dataadb.rc
+          if "$MB" cpio ramdisk.cpio "exists init.rc"; then
+            "$MB" cpio ramdisk.cpio "extract init.rc init.rc.orig"
+            cat init.rc.orig dataadb.rc > init.rc.new
+            "$MB" cpio ramdisk.cpio "add 0750 init.rc init.rc.new"
+            echo ">> Appended /data/adb DeleteIfNecessary to ramdisk init.rc"
+          else
+            echo ">> WARNING: init.rc not present in boot ramdisk (likely in /system on this device)."
+            echo ">> Added standalone init.dataadb.rc; if RAM-boot still set_policy_fails, the"
+            echo ">> directive lives in system init and needs a different injection point."
+            "$MB" cpio ramdisk.cpio "add 0644 init.dataadb.rc dataadb.rc"
+          fi
+          "$MB" repack boot.img new-boot.img
+          cp -f new-boot.img "$GITHUB_WORKSPACE/$IMG"
+          cd "$GITHUB_WORKSPACE"
+          echo ">> Repacked $IMG with /data/adb self-heal"
+
       - name: ✏️ Upload Artifacts
         uses: ./.github/workflows/upload-files
