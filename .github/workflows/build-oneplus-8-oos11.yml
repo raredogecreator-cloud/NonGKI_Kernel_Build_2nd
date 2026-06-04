@@ -71,12 +71,12 @@ env:
   # are the problem on this base. Default-on for other devices (they don't set it).
   KSU_INSTALL : "true"
 
-  # DIAGNOSTIC BISECT #1: SUSFS off. Early-boot panic isolation -- toolchain
-  # (clang 19 & 13) and packaging (raw Image) are ruled out, so we strip the
-  # invasive add-ons. SUSFS off skips the whole patch-susfs step (its base patch
-  # rewrites ~20 core files + inline hooks) and builds resukisu without susfs.
-  # Revert to true once the culprit is found.
-  SUSFS_ENABLE : false
+  # FEATURE STEP 2: SUSFS ON. Bare base booted; +ReSukiSU (KSU) booted with full
+  # hardware OK and root confirmed (manager Working, su works). SUSFS is now the
+  # only new variable -- its base patch rewrites ~20 core files + inline hooks, so
+  # if this build black-screens, SUSFS is the culprit; if it boots, the full
+  # kernel-level stack is done. Baseband-guard stays OFF to keep SUSFS isolated.
+  SUSFS_ENABLE : true
   SUSFS_FIXED : true
 
   AK3_SOURCE : "https://github.com/JackA1ltman/OP8_AnyKernel3.git"
