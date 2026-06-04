@@ -214,6 +214,24 @@ jobs:
 
           cd "$GITHUB_WORKSPACE/device_kernel"
 
+          # WireGuard: Radioactive's net/Kconfig does `source net/wireguard/Kconfig`,
+          # but that subtree is FETCHED at defconfig time (curl|xz|tar) and the
+          # download is flaky under CI GitHub rate limits -- when it returns an
+          # error page instead of the tarball, xz/tar fail, net/wireguard/ never
+          # appears, and kconfig dies hard:
+          #   net/Kconfig:NN: can't open file "net/wireguard/Kconfig"
+          # We don't use WireGuard (proxy is handled in userspace via Box/iptables).
+          # If the subtree didn't materialize, strip the dangling source line and
+          # drop the config so the defconfig parses deterministically every run.
+          if [ ! -f net/wireguard/Kconfig ]; then
+            echo "net/wireguard absent -> removing dangling Kconfig source + disabling CONFIG_WIREGUARD"
+            sed -i '\#net/wireguard/Kconfig#d' net/Kconfig
+            sed -i '/CONFIG_WIREGUARD/d' arch/${{ env.KERNEL_ARCH }}/configs/${{ env.DEFCONFIG_NAME }}
+          else
+            echo "net/wireguard present -> leaving WireGuard intact"
+          fi
+          echo "net/Kconfig wireguard refs after:"; grep -n 'wireguard' net/Kconfig || echo "  (none)"
+
           # Host dtc: 4.19's scripts/dtc/dtc-lexer.l has a tentative
           # "YYLTYPE yylloc;" that collides with the dtc-parser definition under
           # modern host GCC's -fno-common default (HOSTLD scripts/dtc/dtc:
