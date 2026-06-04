@@ -242,6 +242,18 @@ jobs:
           fi
           echo "namei.c susfs include:"; grep -n 'susfs_def.h' fs/namei.c || true
 
+          # ReSukiSU integration guard (KERNELSU_AUTO_FORK=resukisu): its
+          # KernelSU/kernel/tools/static_export_check.mk aborts the build
+          # ("You should integrate ReSukiSU") unless CONFIG_KALLSYMS_ALL is set
+          # OR sel_handle_status_ops is a GLOBAL symbol. radioactive_defconfig is
+          # a perf config and KALLSYMS_ALL depends on DEBUG_KERNEL (off here), so
+          # enabling it would pull in debug overhead. Drop `static` instead so
+          # SELinux's sel_handle_status_ops lands in the kernel symbol table.
+          # Ref: https://resukisu.github.io/guide/manual-integrate.html#static-var-export
+          echo "selinuxfs before:"; grep -n 'sel_handle_status_ops' security/selinux/selinuxfs.c || true
+          sed -i 's/^static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' security/selinux/selinuxfs.c
+          echo "selinuxfs after:"; grep -n 'sel_handle_status_ops' security/selinux/selinuxfs.c || true
+
           # clang-19 vs 4.19 legacy code: the tree promotes several warnings to
           # HARD errors via specific -Werror=<w> (Makefile ~427,942-954:
           # strict-prototypes, implicit-int, implicit-function-declaration,
