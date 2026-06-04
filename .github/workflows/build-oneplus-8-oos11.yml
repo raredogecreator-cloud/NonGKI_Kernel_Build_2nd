@@ -169,7 +169,14 @@ jobs:
           echo "# CONFIG_BUILD_ARM64_KERNEL_COMPRESSION_GZIP is not set" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           echo "CONFIG_BUILD_ARM64_UNCOMPRESSED_KERNEL=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           # echo "CONFIG_KPROBES=n" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
-          sed -i 's/# CONFIG_SECCOMP is not set/CONFIG_SECCOMP=y/' ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          # Seccomp: robustly force ON. radioactive_defconfig may ship it disabled
+          # (perf kernels sometimes drop it) and the old sed only caught the exact
+          # "is not set" string. A real OOS device has seccomp; Android zygote/
+          # system_server install seccomp-bpf filters, so disabled is BOTH a
+          # detection signal and a stability risk. Remove any existing SECCOMP line
+          # (set or "not set"; NOT SECCOMP_FILTER) then force =y.
+          sed -i -E '/^(# )?CONFIG_SECCOMP( is not set|=)/d' ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_SECCOMP=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
 
           # Persistent early logging so the black-screen panic survives a reboot
           # (ramoops/pstore + console + pmsg, plus symbols and no panic auto-reboot).
