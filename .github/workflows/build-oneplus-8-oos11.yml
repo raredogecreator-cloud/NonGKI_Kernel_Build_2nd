@@ -250,9 +250,18 @@ jobs:
           # enabling it would pull in debug overhead. Drop `static` instead so
           # SELinux's sel_handle_status_ops lands in the kernel symbol table.
           # Ref: https://resukisu.github.io/guide/manual-integrate.html#static-var-export
-          echo "selinuxfs before:"; grep -n 'sel_handle_status_ops' security/selinux/selinuxfs.c || true
-          sed -i 's/^static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' security/selinux/selinuxfs.c
-          echo "selinuxfs after:"; grep -n 'sel_handle_status_ops' security/selinux/selinuxfs.c || true
+          # ReSukiSU's drivers/kernelsu/feature/selinux_hide.c references BOTH
+          # sel_handle_status_ops AND the write_op[] dispatch table from
+          # selinuxfs.c via extern. Both are `static` in the OnePlus/Radioactive
+          # 4.19 tree, so without KALLSYMS_ALL they fail to link:
+          #   ld.lld: error: undefined symbol: write_op
+          # Drop `static` on both so they become global vmlinux symbols.
+          echo "selinuxfs before:"; grep -nE 'sel_handle_status_ops|write_op\[\]' security/selinux/selinuxfs.c || true
+          sed -i \
+            -e 's/^static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' \
+            -e 's/^static ssize_t (\*const write_op\[\])/ssize_t (*const write_op[])/' \
+            security/selinux/selinuxfs.c
+          echo "selinuxfs after:"; grep -nE 'sel_handle_status_ops|write_op\[\]' security/selinux/selinuxfs.c || true
 
           # clang-19 vs 4.19 legacy code: the tree promotes several warnings to
           # HARD errors via specific -Werror=<w> (Makefile ~427,942-954:
