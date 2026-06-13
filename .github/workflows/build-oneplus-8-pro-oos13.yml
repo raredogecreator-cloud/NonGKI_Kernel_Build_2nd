@@ -263,6 +263,21 @@ jobs:
           fi
           echo "namespace.c susfs header/externs:"; grep -nE 'susfs_def.h|susfs_is_current_ksu_domain|susfs_is_sdcard_android_data_not_decrypted|CL_COPY_MNT_NS' fs/namespace.c | head -30 || true
 
+
+          # SUSFS/LLD 4.19 workaround:
+          # static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted)
+          # can make ld.lld emit R_AARCH64_LDST32_ABS_LO12_NC against a low-bit
+          # encoded static-key/jump-label address on this old arm64 tree:
+          #   improper alignment ... not aligned to 4 bytes
+          # Avoid the jump-label branch encoding and read the static-key counter directly.
+          # Apply tree-wide (not just namespace.c): any file reading this key via
+          # static_branch_(un)likely hits the same unaligned LDST32 relocation.
+          for f in $(grep -rIl 'susfs_is_sdcard_android_data_not_decrypted' fs drivers/kernelsu 2>/dev/null); do
+            sed -i -E 's/static_branch_(un)?likely\(&susfs_is_sdcard_android_data_not_decrypted\)/static_key_enabled(\&susfs_is_sdcard_android_data_not_decrypted.key)/g' "$f"
+            echo "static_branch workaround applied: $f"
+          done
+          echo "static-key checks:"; grep -rnE 'susfs_is_sdcard_android_data_not_decrypted' fs drivers/kernelsu | grep -E 'static_key_enabled|static_branch' | head -20 || true
+
           # ReSukiSU integration guard: KernelSU/kernel/tools/static_export_check.mk
           # aborts ("You should integrate ReSukiSU") unless CONFIG_KALLSYMS_ALL is
           # set OR sel_handle_status_ops is GLOBAL. kona-perf_defconfig has
@@ -448,8 +463,8 @@ jobs:
             drivers/kernelsu/sulog/event.c \
             drivers/kernelsu/kpm/kpm.c \
             fs/namespace.c fs/namei.c fs/internal.h fs/Makefile \
-            include/linux/cred.h include/linux/uaccess.h include/linux/proc_fs.h \
-            mm/maccess.c fs/stat.c arch/arm64/include/asm/cacheflush.h \
+            include/linux/cred.h include/linux/uaccess.h include/linux/proc_fs.h include/linux/compiler.h include/linux/jump_label.h \
+            mm/maccess.c fs/stat.c arch/arm64/include/asm/cacheflush.h out/System.map out/vmlinux.o out/.tmp_vmlinux1 \
             arch/arm64/configs/${{ env.DEFCONFIG_NAME }} out/.config
           do
             if [ -f "$f" ]; then
