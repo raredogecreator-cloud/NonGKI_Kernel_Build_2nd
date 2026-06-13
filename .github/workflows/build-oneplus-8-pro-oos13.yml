@@ -50,10 +50,10 @@ env:
   AK3_SOURCE : "https://github.com/JackA1ltman/OP8_AnyKernel3.git"
   AK3_BRANCH : "main"
 
-  # TODO: fill in once a stock IN2021 13.1.0.590(EX01) boot.img is dumped from
-  # the device (dd boot_a) and uploaded as a release asset, same pattern as
-  # stock_boot_IN2021_15_200930.img was for A11.
-  BOOT_SOURCE : ""
+  # Stock IN2021_13.1.0.590(EX01) boot.img, MD5-verified against OnePlus's
+  # published 309ff476170e0e5233214d3b271a2436, extracted from the full OTA zip
+  # and uploaded as a release asset (same pattern as the A11 boot.img).
+  BOOT_SOURCE : "https://github.com/raredogecreator-cloud/NonGKI_Kernel_Build_2nd/releases/download/bootimg/stock_boot_IN2021_13.1.0.590_EX01.img"
 
   NEED_DTBO : false
   NEED_SAFE_DTBO : false
