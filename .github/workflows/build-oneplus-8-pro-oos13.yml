@@ -215,6 +215,17 @@ jobs:
           # the same source fixups to compile clean with Proton clang + lld.
           cd "$GITHUB_WORKSPACE/device_kernel"
 
+          # IN-BUILD LDST32 diagnostic: the final vmlinux link fails with
+          # R_AARCH64_LDST32_ABS_LO12_NC against an odd-addressed symbol, but lld
+          # only prints the address, and the post-build cleanup nukes vmlinux.o.
+          # Inject a dump right after modpost creates vmlinux.o (inside
+          # link-vmlinux.sh) so the offending symbol NAMES itself in error.log,
+          # before the link can fail. OBJDUMP is exported by the kernel Makefile.
+          if [ -f scripts/link-vmlinux.sh ] && ! grep -q LDST32_DIAG scripts/link-vmlinux.sh; then
+            sed -i '/^modpost_link vmlinux\.o/a echo "=== LDST32_DIAG_START ==="; ${OBJDUMP:-llvm-objdump} -dr vmlinux.o 2>/dev/null | grep -E "R_AARCH64_LDST32_ABS_LO12_NC" | sed -E "s/.*R_AARCH64_LDST32_ABS_LO12_NC[[:space:]]+/LDST32_SYM /" | sort | uniq -c | sort -rn | head -40; echo "=== LDST32_DIAG_END ==="' scripts/link-vmlinux.sh
+            echo "link-vmlinux.sh diag injected:"; grep -n 'LDST32_DIAG\|modpost_link vmlinux.o' scripts/link-vmlinux.sh || true
+          fi
+
           # WireGuard: net/Kconfig may `source net/wireguard/Kconfig` from a
           # subtree fetched at defconfig time (flaky under CI). We don't use it
           # (proxy handled in userspace). If absent, strip the dangling source +
