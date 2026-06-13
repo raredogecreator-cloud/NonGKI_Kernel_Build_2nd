@@ -261,6 +261,23 @@ jobs:
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
 
+      - name: 🧹 Drop empty built DTB (reuse stock boot.img DTB)
+        shell: bash
+        run: |
+          # opkona's build emits an EMPTY arch/arm64/boot/dtb (the kona dtb CAT
+          # target has no boards selected for our config -> 0 bytes). The packer
+          # picks it up ("Found DTB!") and mkbootimg aborts:
+          #   ValueError: DTB image must not be empty.
+          # Radioactive/A11 produced NO dtb, so the packer fell through and
+          # mkbootimg REUSED the stock boot.img's valid OEM A13 DTB -- exactly
+          # what we want for a kernel-only swap. Replicate that: delete any
+          # empty dtb so the stock one is kept.
+          D="$GITHUB_WORKSPACE/device_kernel/out/arch/arm64/boot"
+          for f in "$D/dtb" "$D/dtb.img"; do
+            if [ -f "$f" ] && [ ! -s "$f" ]; then echo "removing empty $(basename $f)"; rm -f "$f"; fi
+          done
+          ls -la "$D"/dtb "$D"/dtb.img 2>/dev/null || echo "no built dtb remains -> stock boot.img DTB will be reused"
+
       - name: 🔩 Pack Process
         uses: ./.github/workflows/pack-process
 
