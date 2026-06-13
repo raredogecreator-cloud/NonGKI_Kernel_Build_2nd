@@ -316,6 +316,14 @@ jobs:
             echo "kpm access_ok before:"; grep -rn 'access_ok(' drivers/kernelsu/kpm/ | head || true
             find drivers/kernelsu/kpm -name '*.c' -print0 | xargs -0 -r sed -i -E 's/\baccess_ok\(/access_ok(0, /g'
             echo "kpm access_ok after:"; grep -rn 'access_ok(' drivers/kernelsu/kpm/ | head || true
+            # LDST32 align fix: KPM stubs are __attribute__((optnone)). clang emits
+            # optnone funcs without alignment padding -> a following 32-bit global
+            # lands at an odd address -> READ_ONCE (compiler.h:263) emits
+            # R_AARCH64_LDST32_ABS_LO12_NC that lld rejects ("not aligned to 4 bytes").
+            # The stubs are harmless pr_info; drop optnone so they align normally.
+            find drivers/kernelsu/kpm -name '*.c' -print0 | xargs -0 -r perl -0777 -i -pe 's/#define NO_OPTIMIZE[^\n]*/#define NO_OPTIMIZE/g'
+            find drivers/kernelsu/kpm -name '*.c' -print0 | xargs -0 -r sed -i -E 's/__attribute__\(\(optnone\)\)//g; s/__attribute__\(\(optimize\("O0"\)\)\)//g'
+            echo "kpm optnone after:"; grep -rn 'NO_OPTIMIZE\|optnone\|optimize(' drivers/kernelsu/kpm/ | head || true
           fi
 
           # SukiSU-Ultra sulog/event.c calls strncpy_from_user_nofault (5.8+ API);
@@ -447,6 +455,26 @@ jobs:
 
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
+
+      - name: 🔬 LDST32 symbol diagnostic (on failure)
+        if: failure()
+        shell: bash
+        run: |
+          # Deterministically NAME the symbol behind the
+          # R_AARCH64_LDST32_ABS_LO12_NC alignment error. vmlinux.o (relocatable)
+          # still carries the relocation WITH its target symbol name, unlike the
+          # final link which only prints a raw address.
+          cd "$GITHUB_WORKSPACE/device_kernel/out" || exit 0
+          OD=$(find "$GITHUB_WORKSPACE" -name 'llvm-objdump' 2>/dev/null | head -1)
+          [ -z "$OD" ] && OD=$(command -v llvm-objdump || true)
+          echo "objdump=$OD  vmlinux.o=$(ls -la vmlinux.o 2>/dev/null)"
+          if [ -n "$OD" ] && [ -f vmlinux.o ]; then
+            echo "=== files whose .text holds an LDST32 reloc + the target symbol ==="
+            "$OD" -dr vmlinux.o 2>/dev/null \
+              | grep -E 'R_AARCH64_LDST32_ABS_LO12_NC' \
+              | sed -E 's/.*R_AARCH64_LDST32_ABS_LO12_NC[[:space:]]+//' \
+              | sort | uniq -c | sort -rn | head -40
+          fi
 
       - name: 📦 Collect debug bundle
         if: always()
