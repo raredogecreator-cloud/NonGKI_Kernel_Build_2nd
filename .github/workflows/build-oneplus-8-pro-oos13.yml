@@ -262,6 +262,18 @@ jobs:
           sed -i -E '/\+=[[:space:]]+ksu\/$/d' drivers/Makefile
           echo "drivers/Makefile ksu after:"; grep -nE '(^|[[:space:]])ksu/|kernelsu/' drivers/Makefile || true
 
+          # SukiSU-Ultra KPM (drivers/kernelsu/kpm/*.c) uses the NEW 2-arg
+          # access_ok(addr,size) (kernel >=5.0), but this 4.19 kernel has the OLD
+          # 3-arg access_ok(type,addr,size) where `type` is vestigial/ignored.
+          # -> "too few arguments to function-like macro 'access_ok'". Convert the
+          # KPM source's 2-arg calls to 3-arg (type=0, ignored on 4.19). Scoped to
+          # kpm/ where all calls are 2-arg, so the blanket insert is safe.
+          if [ -d drivers/kernelsu/kpm ]; then
+            echo "kpm access_ok before:"; grep -rn 'access_ok(' drivers/kernelsu/kpm/ | head || true
+            find drivers/kernelsu/kpm -name '*.c' -print0 | xargs -0 -r sed -i -E 's/\baccess_ok\(/access_ok(0, /g'
+            echo "kpm access_ok after:"; grep -rn 'access_ok(' drivers/kernelsu/kpm/ | head || true
+          fi
+
           # clang vs 4.19 legacy: tree promotes several warnings to HARD errors via
           # specific -Werror=<w>. A blanket KCFLAGS=-Wno-error does NOT override a
           # specific -Werror=<w> (only -Wno-error=<w> does). Demote them tree-wide.
