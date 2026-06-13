@@ -41,9 +41,12 @@ env:
   KERNELSU_AUTO_GET : "true"
   KERNELSU_AUTO_FORK : "resukisu"
 
-  # STEP 1 (this build): KSU/SUSFS OFF. Bare tree only -> confirm it boots via
-  # `fastboot boot` before layering anything else, same as the A11 sequence.
-  KSU_INSTALL : "false"
+  # STEP 1 (this build): SUSFS OFF. The opkona tree's drivers/Makefile
+  # unconditionally references drivers/ksu/, so KSU_INSTALL must be on
+  # (auto-fetches ReSukiSU) just to make the tree buildable. SUSFS gets
+  # layered in step 2 -> confirm this boots via `fastboot boot` first,
+  # same as the A11 sequence.
+  KSU_INSTALL : "true"
   SUSFS_ENABLE : false
   SUSFS_FIXED : true
 
