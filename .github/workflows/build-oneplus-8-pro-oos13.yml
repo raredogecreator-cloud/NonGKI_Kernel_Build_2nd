@@ -121,6 +121,13 @@ jobs:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
+      # STEALTH: make /proc/version look like the stock OOS13.1 kernel instead of
+      # "runner@runnervmqtt2i ... 2026" (CI/custom tells). Mimic stock builder +
+      # period-correct date. Stock string (from IN2021_13.1.0.590 boot.img):
+      #   Linux version 4.19.157-perf+ (root@dg02-pool06-kvm52) ... Thu Jun 6 ... 2024
+      KBUILD_BUILD_USER: "root"
+      KBUILD_BUILD_HOST: "dg02-pool06-kvm52"
+      KBUILD_BUILD_TIMESTAMP: "Thu Jun  6 00:16:57 UTC 2024"
 
     steps:
       - name: ⏰ Checkout repository
@@ -166,6 +173,15 @@ jobs:
           echo "CONFIG_PSTORE_DEFLATE_COMPRESS=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           echo "CONFIG_DEBUG_INFO=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           echo "CONFIG_PANIC_TIMEOUT=0" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          # KPM needs the in-kernel CONFIG_KPM interface (ksud kpm ioctl was failing
+          # with "Inappropriate ioctl" -> not compiled). The pipeline only sets
+          # CONFIG_KPM=y when CONFIG_KALLSYMS_ALL=y, which depends on DEBUG_KERNEL.
+          echo "CONFIG_DEBUG_KERNEL=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_KALLSYMS_ALL=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          # STEALTH: drop the "-Meteoric" localversion tell (SUSFS spoofs the full
+          # release to stock 4.19.157-perf+ at runtime; this is just the fallback).
+          sed -i '/^CONFIG_LOCALVERSION=/d' ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo 'CONFIG_LOCALVERSION="-perf"' >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
 
       - name: 🧰 Patch Kernel of Re:Kernel
         uses: ./.github/workflows/patch-rekernel
