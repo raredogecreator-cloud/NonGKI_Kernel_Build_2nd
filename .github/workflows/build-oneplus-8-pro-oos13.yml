@@ -142,6 +142,22 @@ jobs:
       - name: ⚙️ Get neccssary tools
         uses: ./.github/workflows/build-ready
 
+      - name: 📌 Pin SukiSU-Ultra to known-good commit
+        shell: bash
+        run: |
+          # Pin official SukiSU-Ultra (builtin) to a fixed commit so builds are
+          # reproducible and our local 4.19 patchset matches the source. setup.sh
+          # cloned it shallow -> unshallow first, then checkout the pin.
+          KSU_DIR="$GITHUB_WORKSPACE/device_kernel/KernelSU"
+          PIN="6c13a0695a1115e1000c998872b66f4ff5b2f11e"
+          if [ -d "$KSU_DIR/.git" ]; then
+            git -C "$KSU_DIR" fetch --unshallow 2>/dev/null || git -C "$KSU_DIR" fetch --depth=200 origin builtin || true
+            git -C "$KSU_DIR" checkout "$PIN" 2>/dev/null && echo "pinned KSU to $PIN" || echo "WARN: pin checkout failed, using builtin HEAD"
+            git -C "$KSU_DIR" log -1 --oneline || true
+          else
+            echo "WARN: $KSU_DIR not a git repo, skipping pin"
+          fi
+
       - name: 🪝 Patch Kernel of SUSFS
         uses: ./.github/workflows/patch-susfs
 
@@ -273,6 +289,110 @@ jobs:
             find drivers/kernelsu/kpm -name '*.c' -print0 | xargs -0 -r sed -i -E 's/\baccess_ok\(/access_ok(0, /g'
             echo "kpm access_ok after:"; grep -rn 'access_ok(' drivers/kernelsu/kpm/ | head || true
           fi
+
+          # SukiSU-Ultra sulog/event.c calls strncpy_from_user_nofault (5.8+ API);
+          # 4.19 lacks it and SukiSU ships no shim -> inject one (prepend to event.c
+          # after pulling uaccess.h). nofault = strncpy_from_user with pagefaults off.
+          if [ -f drivers/kernelsu/sulog/event.c ] && ! grep -q 'ksu419_strncpy_compat' drivers/kernelsu/sulog/event.c; then
+            printf '%s\n' \
+              '/* ksu419_strncpy_compat */' \
+              '#include <linux/version.h>' \
+              '#include <linux/uaccess.h>' \
+              '#if LINUX_VERSION_CODE < KERNEL_VERSION(5,8,0)' \
+              'static inline long strncpy_from_user_nofault(char *dst, const void __user *src, long count) {' \
+              '    long ret; pagefault_disable(); ret = strncpy_from_user(dst, src, count); pagefault_enable(); return ret;' \
+              '}' \
+              '#endif' > /tmp/ev_pre.c
+            cat /tmp/ev_pre.c drivers/kernelsu/sulog/event.c > /tmp/ev.c && mv /tmp/ev.c drivers/kernelsu/sulog/event.c
+            echo "strncpy shim injected into event.c"
+          fi
+
+          # SukiSU-Ultra runtime/ksud.c calls ksu_selinux_hide_handle_{second_stage,
+          # post_fs_data}() unconditionally, but those are defined only for >=6.6.0
+          # (feature/selinux_hide.o not linked on 4.19) -> undefined symbol. SELinux
+          # hiding on 4.19 is handled by SUSFS, so provide no-op stubs (guarded <6.6
+          # to avoid any duplicate if the real ones ever link).
+          if [ -f drivers/kernelsu/runtime/ksud.c ] && ! grep -q 'ksu419_selinux_hide_stub' drivers/kernelsu/runtime/ksud.c; then
+            printf '%s\n' \
+              '' \
+              '/* ksu419_selinux_hide_stub */' \
+              '#include <linux/version.h>' \
+              '#if LINUX_VERSION_CODE < KERNEL_VERSION(6,6,0)' \
+              'void ksu_selinux_hide_handle_second_stage(void) {}' \
+              'void ksu_selinux_hide_handle_post_fs_data(void) {}' \
+              '#endif' >> drivers/kernelsu/runtime/ksud.c
+            echo "selinux_hide stubs appended to ksud.c"
+          fi
+
+          # 4.19 non-GKI backports required by SukiSU-Ultra/SUSFS (proven recipe from
+          # larrypaul93/k30s-reference): path_umount + can_umount (5.9+) and
+          # get_cred_rcu. Without these the KSU umount + cred paths fail to link.
+          if ! grep -q "^static int can_umount" fs/namespace.c; then
+            {
+              echo ""
+              echo "/* Backport can_umount for SUSFS/KernelSU (4.19) */"
+              echo "static int can_umount(const struct path *path, int flags)"
+              echo "{"
+              echo "    struct mount *mnt = real_mount(path->mnt);"
+              echo "    if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))"
+              echo "        return -EINVAL;"
+              echo "    if (!may_mount())"
+              echo "        return -EPERM;"
+              echo "    if (path->dentry != path->mnt->mnt_root)"
+              echo "        return -EINVAL;"
+              echo "    if (!check_mnt(mnt))"
+              echo "        return -EINVAL;"
+              echo "    if (mnt->mnt.mnt_flags & MNT_LOCKED)"
+              echo "        return -EINVAL;"
+              echo "    if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))"
+              echo "        return -EPERM;"
+              echo "    return 0;"
+              echo "}"
+            } >> fs/namespace.c
+          fi
+          if ! grep -q "^int path_umount" fs/namespace.c; then
+            {
+              echo ""
+              echo "/* Backport path_umount from Linux 5.9+ for KernelSU/SUSFS */"
+              echo "int path_umount(struct path *path, int flags)"
+              echo "{"
+              echo "    struct mount *mnt = real_mount(path->mnt);"
+              echo "    int ret;"
+              echo "    ret = can_umount(path, flags);"
+              echo "    if (!ret)"
+              echo "        ret = do_umount(mnt, flags);"
+              echo "    dput(path->dentry);"
+              echo "    mntput_no_expire(mnt);"
+              echo "    return ret;"
+              echo "}"
+              echo "EXPORT_SYMBOL(path_umount);"
+            } >> fs/namespace.c
+          fi
+          grep -q "int path_umount" fs/internal.h || sed -i '/^extern void __init mnt_init/a int path_umount(struct path *path, int flags);' fs/internal.h
+          echo 'CFLAGS_namespace.o += -Wno-unused-function' >> fs/Makefile
+          if ! grep -q "get_cred_rcu" include/linux/cred.h; then
+            {
+              echo ""
+              echo "/* Backport get_cred_rcu for KernelSU (4.19) */"
+              echo "static inline const struct cred *get_cred_rcu(const struct cred *cred)"
+              echo "{"
+              echo "    struct cred *nonconst_cred = (struct cred *) cred;"
+              echo "    if (!cred)"
+              echo "        return NULL;"
+              echo "    if (!atomic_inc_not_zero(&nonconst_cred->usage))"
+              echo "        return NULL;"
+              echo "    return cred;"
+              echo "}"
+            } > /tmp/get_cred_rcu.txt
+            LINE=$(grep -n "^static inline void put_cred" include/linux/cred.h | head -1 | cut -d: -f1)
+            if [ -n "$LINE" ]; then
+              head -n $((LINE - 1)) include/linux/cred.h > /tmp/cred_new.h
+              cat /tmp/get_cred_rcu.txt >> /tmp/cred_new.h
+              tail -n +$LINE include/linux/cred.h >> /tmp/cred_new.h
+              mv /tmp/cred_new.h include/linux/cred.h
+            fi
+          fi
+          echo "backports:"; grep -c "path_umount\|get_cred_rcu" fs/namespace.c include/linux/cred.h || true
 
           # clang vs 4.19 legacy: tree promotes several warnings to HARD errors via
           # specific -Werror=<w>. A blanket KCFLAGS=-Wno-error does NOT override a
