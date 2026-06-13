@@ -35,8 +35,13 @@ env:
   GCC_32_BRANCH : "arm32"
 
   DEFCONFIG_SOURCE: ""
-  # Meteoric oos branch's STOCK OxygenOS config (CONFIG_OPLUS_SYSTEM_KERNEL_QCOM=y).
-  DEFCONFIG_NAME : "vendor/kona-stock_defconfig"
+  # Meteoric oos (OxygenOS) branch PRODUCTION config. kona-perf has STUNE_ASSIST=y
+  # AND CPUSET_ASSIST=y -- the code (kernel/sched/tune.c, kernel/cgroup/cpuset.c)
+  # references those *_ASSIST wrappers/structs UNCONDITIONALLY, so the dev's real
+  # build config must enable them. kona-stock_defconfig is a stripped config that
+  # OMITS them -> "undeclared identifier *_write_wrapper" / "incomplete type
+  # cs_target". kona-perf on the oos branch = how the dev actually builds for OOS.
+  DEFCONFIG_NAME : "vendor/kona-perf_defconfig"
   DEFCONFIG_ORIGIN_IMAGE: ""
   DEFCONFIG_FROM_BOOT: false
 
