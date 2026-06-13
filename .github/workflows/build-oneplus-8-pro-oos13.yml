@@ -215,15 +215,18 @@ jobs:
           # the same source fixups to compile clean with Proton clang + lld.
           cd "$GITHUB_WORKSPACE/device_kernel"
 
-          # IN-BUILD LDST32 diagnostic: the final vmlinux link fails with
-          # R_AARCH64_LDST32_ABS_LO12_NC against an odd-addressed symbol, but lld
-          # only prints the address, and the post-build cleanup nukes vmlinux.o.
-          # Inject a dump right after modpost creates vmlinux.o (inside
-          # link-vmlinux.sh) so the offending symbol NAMES itself in error.log,
-          # before the link can fail. OBJDUMP is exported by the kernel Makefile.
-          if [ -f scripts/link-vmlinux.sh ] && ! grep -q LDST32_DIAG scripts/link-vmlinux.sh; then
-            sed -i '/^modpost_link vmlinux\.o/a echo "=== LDST32_DIAG_START ==="; ${OBJDUMP:-llvm-objdump} -dr vmlinux.o 2>/dev/null | grep -E "R_AARCH64_LDST32_ABS_LO12_NC" | sed -E "s/.*R_AARCH64_LDST32_ABS_LO12_NC[[:space:]]+/LDST32_SYM /" | sort | uniq -c | sort -rn | head -40; echo "=== LDST32_DIAG_END ==="' scripts/link-vmlinux.sh
-            echo "link-vmlinux.sh diag injected:"; grep -n 'LDST32_DIAG\|modpost_link vmlinux.o' scripts/link-vmlinux.sh || true
+          # FORCE-LINK + NAME the misaligned symbol (definitive). The final vmlinux
+          # link fails on R_AARCH64_LDST32_ABS_LO12_NC against an odd address
+          # (0xffffff800ac10929); the symbol is only knowable AFTER addresses are
+          # assigned, which never happens because the link aborts. Add
+          # --noinhibit-exec so lld downgrades the error and still produces
+          # .tmp_vmlinux1, then nm that region to print the symbol sitting at the odd
+          # address. THIS BUILD IS A THROWAWAY DIAGNOSTIC -- the resulting image has 3
+          # wrong relocations and must NOT be flashed.
+          if [ -f scripts/link-vmlinux.sh ] && ! grep -q ODDSYM_DIAG scripts/link-vmlinux.sh; then
+            sed -i 's/${LDFLAGS_vmlinux} -o ${2}/${LDFLAGS_vmlinux} --noinhibit-exec -o ${2}/' scripts/link-vmlinux.sh
+            sed -i '/vmlinux_link "" .tmp_vmlinux1/a echo "=== ODDSYM_DIAG_START ==="; ${NM} -n .tmp_vmlinux1 2>/dev/null | grep -iE "^ffffff800ac10[0-9a-f]{3} " ; echo "--- 64K context (head) ---"; ${NM} -n .tmp_vmlinux1 2>/dev/null | grep -iE "^ffffff800ac1[0-9a-f]{4} " | head -80 ; echo "=== ODDSYM_DIAG_END ==="' scripts/link-vmlinux.sh
+            echo "oddsym diag injected:"; grep -n 'ODDSYM_DIAG\|noinhibit-exec' scripts/link-vmlinux.sh || true
           fi
 
           # WireGuard: net/Kconfig may `source net/wireguard/Kconfig` from a
