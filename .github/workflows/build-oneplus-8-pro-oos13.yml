@@ -135,11 +135,113 @@ jobs:
         if: env.KSU_INSTALL != 'false'
         uses: ./.github/workflows/patch-no-kprobe
 
+      - name: 🪛 Extra Kernel Options
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+          echo "CONFIG_CPU_BIG_ENDIAN=n" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_COMPAT_VDSO=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_LTO_NONE=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_INIT_STACK_NONE=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_BUILD_ARM64_DT_OVERLAY=n" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          # Force RAW uncompressed Image: kona-perf_defconfig defaults to GZIP
+          # (build_kernel.sh copies Image.gz), but the stock 8 Pro boot.img carries
+          # a raw Image and our MKBOOTIMG repack feeds the kernel as-is -> must be
+          # raw to boot.
+          echo "# CONFIG_BUILD_ARM64_KERNEL_COMPRESSION_GZIP is not set" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_BUILD_ARM64_UNCOMPRESSED_KERNEL=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          # Seccomp: force ON (perf configs sometimes drop it; a real OOS device
+          # has seccomp -> disabled is both a detection signal and a stability risk).
+          sed -i -E '/^(# )?CONFIG_SECCOMP( is not set|=)/d' ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_SECCOMP=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          # Persistent early logging so a black-screen panic survives a reboot
+          # (ramoops/pstore + console + pmsg, symbols, no panic auto-reboot).
+          echo "CONFIG_PSTORE=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_PSTORE_CONSOLE=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_PSTORE_RAM=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_PSTORE_PMSG=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_PSTORE_DEFLATE_COMPRESS=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_DEBUG_INFO=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_PANIC_TIMEOUT=0" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+
       - name: 🧰 Patch Kernel of Re:Kernel
         uses: ./.github/workflows/patch-rekernel
 
       - name: 🔒 Patch Kernel of Baseband Guard
         uses: ./.github/workflows/patch-baseband-guard
+
+      - name: 🩹 Toolchain compat fixes (tree patches)
+        shell: bash
+        run: |
+          # Same OnePlus/Oplus 4.19 lineage as the proven A11 build, so it needs
+          # the same source fixups to compile clean with Proton clang + lld.
+          cd "$GITHUB_WORKSPACE/device_kernel"
+
+          # WireGuard: net/Kconfig may `source net/wireguard/Kconfig` from a
+          # subtree fetched at defconfig time (flaky under CI). We don't use it
+          # (proxy handled in userspace). If absent, strip the dangling source +
+          # config so kconfig parses deterministically.
+          if [ ! -f net/wireguard/Kconfig ]; then
+            echo "net/wireguard absent -> removing dangling Kconfig source + disabling CONFIG_WIREGUARD"
+            sed -i '\#net/wireguard/Kconfig#d' net/Kconfig
+            sed -i '/CONFIG_WIREGUARD/d' arch/${{ env.KERNEL_ARCH }}/configs/${{ env.DEFCONFIG_NAME }}
+          fi
+
+          # Host dtc: 4.19's dtc-lexer.l has a tentative "YYLTYPE yylloc;" that
+          # collides under modern host GCC -fno-common ("multiple definition of
+          # 'yylloc'"). Mark extern.
+          DTC_LEXER="scripts/dtc/dtc-lexer.l"
+          sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/' "$DTC_LEXER"
+
+          # cpuset: CONFIG_CPUSET_ASSIST's `struct cs_target` is #ifdef-guarded but
+          # the helper cpuset_write_resmask_assist() (takes it BY VALUE) is left
+          # OUTSIDE the guard -> "incomplete type 'struct cs_target'" when the
+          # feature is off. The fn is only called from inside the existing
+          # #ifdef block, so guard its definition too (compiles either way).
+          echo "cpuset before:"; grep -n 'cpuset_write_resmask_assist' kernel/cgroup/cpuset.c || true
+          perl -0777 -i -pe 's/(static ssize_t cpuset_write_resmask_assist\(.*?\n\}\n)/#ifdef CONFIG_CPUSET_ASSIST\n${1}#endif\n/s' kernel/cgroup/cpuset.c
+          echo "cpuset after:"; grep -n 'CONFIG_CPUSET_ASSIST\|cpuset_write_resmask_assist' kernel/cgroup/cpuset.c | head || true
+
+          # SUSFS reject (fs/namei.c): base susfs patch's "#include
+          # <linux/susfs_def.h>" hunk rejects because OnePlus inserted a
+          # "#ifdef CONFIG_FSC" block right after <linux/build_bug.h>. The other
+          # namei.c hunks applied and use susfs_def.h macros, so the include is
+          # REQUIRED to compile. Re-add it after build_bug.h.
+          if ! grep -q 'linux/susfs_def.h' fs/namei.c; then
+            perl -0777 -i -pe 's{(#include <linux/build_bug.h>\n)}{$1#if defined(CONFIG_KSU_SUSFS_SUS_PATH) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux/susfs_def.h>\n#endif\n}' fs/namei.c
+          fi
+          echo "namei.c susfs include:"; grep -n 'susfs_def.h' fs/namei.c || true
+
+          # ReSukiSU integration guard: KernelSU/kernel/tools/static_export_check.mk
+          # aborts ("You should integrate ReSukiSU") unless CONFIG_KALLSYMS_ALL is
+          # set OR sel_handle_status_ops is GLOBAL. kona-perf_defconfig has
+          # KALLSYMS_ALL off, so drop `static` instead. ReSukiSU's selinux_hide.c
+          # references BOTH sel_handle_status_ops AND the write_op[] dispatch table
+          # via extern (both `static` in this tree -> ld.lld undefined symbol).
+          echo "selinuxfs before:"; grep -nE 'sel_handle_status_ops|write_op\[\]' security/selinux/selinuxfs.c || true
+          sed -i \
+            -e 's/^static const struct file_operations sel_handle_status_ops/const struct file_operations sel_handle_status_ops/' \
+            -e 's/^static ssize_t (\*const write_op\[\])/ssize_t (*const write_op[])/' \
+            security/selinux/selinuxfs.c
+          echo "selinuxfs after:"; grep -nE 'sel_handle_status_ops|write_op\[\]' security/selinux/selinuxfs.c || true
+
+          # clang vs 4.19 legacy: tree promotes several warnings to HARD errors via
+          # specific -Werror=<w>. A blanket KCFLAGS=-Wno-error does NOT override a
+          # specific -Werror=<w> (only -Wno-error=<w> does). Demote them tree-wide.
+          sed -i 's/-Werror=/-Wno-error=/g; s/-Werror-implicit-function-declaration/-Wno-error=implicit-function-declaration/g' Makefile
+          # Strip blanket per-directory -Werror (some vendor dirs append a bare
+          # -Werror AFTER our flags, re-promoting warnings to hard errors).
+          find . \( -name Makefile -o -name Kbuild \) -print0 | xargs -0 -r sed -i -E 's/-Werror([[:space:]]|$)/\1/g'
+
+          # vmlinux LINK shims for clang+lld on this 4.19 tree (confirmed with
+          # Proton clang-13/lld-13, NOT version-specific):
+          # (a) clang synthesizes stpcpy()/stpncpy() libcalls 4.19 doesn't define
+          #     -> "ld.lld: undefined symbol: stpcpy". Mark non-builtin.
+          sed -i '/\$(KCFLAGS)/a KBUILD_CFLAGS += -fno-builtin-stpcpy -fno-builtin-stpncpy' Makefile
+          # (b) CONFIG_MODVERSIONS emits __crc_<sym> via R_AARCH64_ABS32 which
+          #     ld.lld rejects in the PIE vmlinux link. Disable module CRC
+          #     versioning (in-tree modules unaffected; vermagic still guards).
+          sed -i 's/^CONFIG_MODVERSIONS=y/# CONFIG_MODVERSIONS is not set/' arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "modversions:"; grep -n 'MODVERSIONS' arch/arm64/configs/${{ env.DEFCONFIG_NAME }} || true
 
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
