@@ -224,6 +224,21 @@ jobs:
             security/selinux/selinuxfs.c
           echo "selinuxfs after:"; grep -nE 'sel_handle_status_ops|write_op\[\]' security/selinux/selinuxfs.c || true
 
+          # Duplicate KernelSU: opkona BUNDLES its own KernelSU
+          # (drivers/Makefile: "obj-$(CONFIG_KSU) += ksu/" + drivers/Kconfig
+          # "config KSU"). The NonGKI pipeline ALSO symlinks ReSukiSU to
+          # drivers/kernelsu and appends "obj-$(CONFIG_KSU) += kernelsu/". Under
+          # CONFIG_KSU=y BOTH compile -> ld.lld duplicate symbol: kernelsu_init,
+          # ksu_cred, ... at the vmlinux link. (Radioactive/A11 had no bundled KSU
+          # so never hit this.) Keep ONLY the pipeline's ReSukiSU: drop the tree's
+          # bundled ksu/ from the build. Touch ONLY the Makefile line (anchored,
+          # won't match "kernelsu/") -- NOT the Kconfig menu, because the pipeline
+          # inserts ReSukiSU's "source drivers/kernelsu/Kconfig" inside that same
+          # menu and removing the block could un-wire ReSukiSU.
+          echo "drivers/Makefile ksu before:"; grep -nE '(^|[[:space:]])ksu/|kernelsu/' drivers/Makefile || true
+          sed -i -E '/\+=[[:space:]]+ksu\/$/d' drivers/Makefile
+          echo "drivers/Makefile ksu after:"; grep -nE '(^|[[:space:]])ksu/|kernelsu/' drivers/Makefile || true
+
           # clang vs 4.19 legacy: tree promotes several warnings to HARD errors via
           # specific -Werror=<w>. A blanket KCFLAGS=-Wno-error does NOT override a
           # specific -Werror=<w> (only -Wno-error=<w> does). Demote them tree-wide.
