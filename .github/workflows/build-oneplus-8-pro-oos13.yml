@@ -49,10 +49,7 @@ env:
   KERNELSU_BRANCH : ""
 
   KERNELSU_AUTO_GET : "true"
-  # SukiSU-Ultra: KPM is its flagship built-in feature (resukisu's current version
-  # dropped CONFIG_KPM -> dead KPM tab). Non-GKI 4.x-5.4 support, built-in SUSFS,
-  # Strong Integrity. Strongest for our non-GKI + KPM + SUSFS + stealth combo.
-  KERNELSU_AUTO_FORK : "sukisu"
+  KERNELSU_AUTO_FORK : "resukisu"
 
   # STEP 2: KSU bare-boot PASSED on Meteoric oos+kona-perf (4.19.282-Meteoric
   # booted, root works, all 13 modules loaded). Now enable SUSFS + KPM-inline to
@@ -93,10 +90,12 @@ env:
 
   KERNEL_PATCH: "false"
 
-  # Match A11 proven config: KPM + inline-hook support (this is the "inline" the
-  # manager showed on A11; HOOK_METHOD stays syscall like A11).
-  KPM_ENABLE: "true"
-  KPM_INLINE: "true"
+  # KPM REMOVED: ReSukiSU deleted kernel KPM on 2026-06-06 (commit 3d9d930, PR
+  # #226 - "KernelPatch is useless, we can modify kernel source directly"). We
+  # compile our own kernel, so KPM buys nothing. Off = no KernelPatch Image-patch
+  # signature either (cleaner/stealthier). All anti-detection is SUSFS + modules.
+  KPM_ENABLE: "false"
+  KPM_INLINE: "false"
   KPM_KPATCH_NEXT: "false"
   KPM_PATCH_SOURCE: "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/refs/heads/main/kpm/patch_linux"
 
@@ -142,22 +141,6 @@ jobs:
       - name: ⚙️ Get neccssary tools
         uses: ./.github/workflows/build-ready
 
-      - name: 📌 Pin SukiSU-Ultra to known-good commit
-        shell: bash
-        run: |
-          # Pin official SukiSU-Ultra (builtin) to a fixed commit so builds are
-          # reproducible and our local 4.19 patchset matches the source. setup.sh
-          # cloned it shallow -> unshallow first, then checkout the pin.
-          KSU_DIR="$GITHUB_WORKSPACE/device_kernel/KernelSU"
-          PIN="6c13a0695a1115e1000c998872b66f4ff5b2f11e"
-          if [ -d "$KSU_DIR/.git" ]; then
-            git -C "$KSU_DIR" fetch --unshallow 2>/dev/null || git -C "$KSU_DIR" fetch --depth=200 origin builtin || true
-            git -C "$KSU_DIR" checkout "$PIN" 2>/dev/null && echo "pinned KSU to $PIN" || echo "WARN: pin checkout failed, using builtin HEAD"
-            git -C "$KSU_DIR" log -1 --oneline || true
-          else
-            echo "WARN: $KSU_DIR not a git repo, skipping pin"
-          fi
-
       - name: 🪝 Patch Kernel of SUSFS
         uses: ./.github/workflows/patch-susfs
 
@@ -202,6 +185,27 @@ jobs:
           sed -i '/^CONFIG_LOCALVERSION=/d' ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           echo 'CONFIG_LOCALVERSION="-perf"' >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
 
+          # ───────── Performance / battery tweaks (in-tree on this 4.19 kernel, ─────────
+          # ───────── verified present; safe, no boot risk, no stealth impact) ─────────
+          # TWEAK 1 - MGLRU (Multi-Gen LRU): modern page-reclaim engine (backported
+          # into this tree as CONFIG_LRU_GEN). Reclaims memory smarter -> less jank
+          # and fewer app reloads when many apps are open, and a small battery win
+          # (reclaim does less scanning work). Enabled at boot via LRU_GEN_ENABLED.
+          echo "CONFIG_LRU_GEN=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_LRU_GEN_ENABLED=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          # TWEAK 2 - BBR TCP congestion control + FQ qdisc, made the system default.
+          # Google's BBR gives faster, steadier throughput on mobile/lossy links
+          # (better real-world 4G/Wi-Fi speed) than the legacy cubic. FQ is the qdisc
+          # BBR is designed to pair with. Pure in-kernel: NO 3rd-party app and NO
+          # runtime sysctl needed, and congestion control is invisible to apps ->
+          # zero detection surface.
+          echo "CONFIG_TCP_CONG_BBR=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_NET_SCH_FQ=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          sed -i -E '/^CONFIG_DEFAULT_(CUBIC|RENO|BBR2|HTCP|VEGAS|WESTWOOD|HYBLA|BIC)=/d' ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "CONFIG_DEFAULT_BBR=y" >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          sed -i '/^CONFIG_DEFAULT_TCP_CONG=/d' ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> ./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+
       - name: 🧰 Patch Kernel of Re:Kernel
         uses: ./.github/workflows/patch-rekernel
 
@@ -214,24 +218,6 @@ jobs:
           # Same OnePlus/Oplus 4.19 lineage as the proven A11 build, so it needs
           # the same source fixups to compile clean with Proton clang + lld.
           cd "$GITHUB_WORKSPACE/device_kernel"
-
-          # FORCE-LINK + NAME the misaligned symbol (definitive). The final vmlinux
-          # link fails on R_AARCH64_LDST32_ABS_LO12_NC against an odd address
-          # (0xffffff800ac10929); the symbol is only knowable AFTER addresses are
-          # assigned, which never happens because the link aborts. Add
-          # --noinhibit-exec so lld downgrades the error and still produces
-          # .tmp_vmlinux1, then nm that region to print the symbol sitting at the odd
-          # address. THIS BUILD IS A THROWAWAY DIAGNOSTIC -- the resulting image has 3
-          # wrong relocations and must NOT be flashed.
-          if [ -f scripts/link-vmlinux.sh ] && ! grep -q ODDSYM_DIAG scripts/link-vmlinux.sh; then
-            sed -i 's/${LDFLAGS_vmlinux} -o ${2}/${LDFLAGS_vmlinux} --noinhibit-exec -o ${2}/' scripts/link-vmlinux.sh
-            # link-vmlinux.sh runs under set -e; lld still exits non-zero even with
-            # --noinhibit-exec, aborting the script before the dump. Append || true to
-            # the link command so the script survives and our nm dump runs.
-            sed -i 's@-T ${lds} ${objects}@-T ${lds} ${objects} || true@' scripts/link-vmlinux.sh
-            sed -i '/vmlinux_link "" .tmp_vmlinux1/a echo "=== ODDSYM_DIAG_START ==="; ls -la .tmp_vmlinux1 2>/dev/null || echo "NO .tmp_vmlinux1 produced"; ${NM} -n .tmp_vmlinux1 2>/dev/null | grep -iE "^ffffff800ac10[0-9a-f]{3} " ; echo "--- 64K context (head) ---"; ${NM} -n .tmp_vmlinux1 2>/dev/null | grep -iE "^ffffff800ac1[0-9a-f]{4} " | head -80 ; echo "=== ODDSYM_DIAG_END ==="' scripts/link-vmlinux.sh
-            echo "oddsym diag injected:"; grep -n 'ODDSYM_DIAG\|noinhibit-exec\|objects} || true' scripts/link-vmlinux.sh || true
-          fi
 
           # WireGuard: net/Kconfig may `source net/wireguard/Kconfig` from a
           # subtree fetched at defconfig time (flaky under CI). We don't use it
@@ -268,34 +254,6 @@ jobs:
           fi
           echo "namei.c susfs include:"; grep -n 'susfs_def.h' fs/namei.c || true
 
-          # SUSFS reject (fs/namespace.c): patch_rejected_files.zip confirms the
-          # include/extern hunk rejected while later SUSFS code was inserted. Add
-          # missing header, externs, and CL_COPY_MNT_NS before build reaches fs/.
-          if grep -q 'susfs_is_current_ksu_domain' fs/namespace.c; then
-            if ! grep -q 'linux/susfs_def.h' fs/namespace.c; then
-              perl -0777 -i -pe 's{(#include <linux/sched/task.h>\n)}{$1#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif\n}' fs/namespace.c
-            fi
-            if ! grep -q 'extern bool susfs_is_current_ksu_domain' fs/namespace.c; then
-              perl -0777 -i -pe 's{(#include "internal.h"\n)}{$1\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n#ifndef CL_COPY_MNT_NS\n#define CL_COPY_MNT_NS BIT(25)\n#endif\n#endif\n}' fs/namespace.c
-            fi
-          fi
-          echo "namespace.c susfs header/externs:"; grep -nE 'susfs_def.h|susfs_is_current_ksu_domain|susfs_is_sdcard_android_data_not_decrypted|CL_COPY_MNT_NS' fs/namespace.c | head -30 || true
-
-
-          # SUSFS/LLD 4.19 workaround:
-          # static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted)
-          # can make ld.lld emit R_AARCH64_LDST32_ABS_LO12_NC against a low-bit
-          # encoded static-key/jump-label address on this old arm64 tree:
-          #   improper alignment ... not aligned to 4 bytes
-          # Avoid the jump-label branch encoding and read the static-key counter directly.
-          # Apply tree-wide (not just namespace.c): any file reading this key via
-          # static_branch_(un)likely hits the same unaligned LDST32 relocation.
-          for f in $(grep -rIl 'susfs_is_sdcard_android_data_not_decrypted' fs drivers/kernelsu 2>/dev/null); do
-            sed -i -E 's/static_branch_(un)?likely\(&susfs_is_sdcard_android_data_not_decrypted\)/static_key_enabled(\&susfs_is_sdcard_android_data_not_decrypted.key)/g' "$f"
-            echo "static_branch workaround applied: $f"
-          done
-          echo "static-key checks:"; grep -rnE 'susfs_is_sdcard_android_data_not_decrypted' fs drivers/kernelsu | grep -E 'static_key_enabled|static_branch' | head -20 || true
-
           # ReSukiSU integration guard: KernelSU/kernel/tools/static_export_check.mk
           # aborts ("You should integrate ReSukiSU") unless CONFIG_KALLSYMS_ALL is
           # set OR sel_handle_status_ops is GLOBAL. kona-perf_defconfig has
@@ -324,134 +282,6 @@ jobs:
           sed -i -E '/\+=[[:space:]]+ksu\/$/d' drivers/Makefile
           echo "drivers/Makefile ksu after:"; grep -nE '(^|[[:space:]])ksu/|kernelsu/' drivers/Makefile || true
 
-          # SukiSU-Ultra KPM (drivers/kernelsu/kpm/*.c) uses the NEW 2-arg
-          # access_ok(addr,size) (kernel >=5.0), but this 4.19 kernel has the OLD
-          # 3-arg access_ok(type,addr,size) where `type` is vestigial/ignored.
-          # -> "too few arguments to function-like macro 'access_ok'". Convert the
-          # KPM source's 2-arg calls to 3-arg (type=0, ignored on 4.19). Scoped to
-          # kpm/ where all calls are 2-arg, so the blanket insert is safe.
-          if [ -d drivers/kernelsu/kpm ]; then
-            echo "kpm access_ok before:"; grep -rn 'access_ok(' drivers/kernelsu/kpm/ | head || true
-            find drivers/kernelsu/kpm -name '*.c' -print0 | xargs -0 -r sed -i -E 's/\baccess_ok\(/access_ok(0, /g'
-            echo "kpm access_ok after:"; grep -rn 'access_ok(' drivers/kernelsu/kpm/ | head || true
-            # LDST32 align fix: KPM stubs are __attribute__((optnone)). clang emits
-            # optnone funcs without alignment padding -> a following 32-bit global
-            # lands at an odd address -> READ_ONCE (compiler.h:263) emits
-            # R_AARCH64_LDST32_ABS_LO12_NC that lld rejects ("not aligned to 4 bytes").
-            # The stubs are harmless pr_info; drop optnone so they align normally.
-            find drivers/kernelsu/kpm -name '*.c' -print0 | xargs -0 -r perl -0777 -i -pe 's/#define NO_OPTIMIZE[^\n]*/#define NO_OPTIMIZE/g'
-            find drivers/kernelsu/kpm -name '*.c' -print0 | xargs -0 -r sed -i -E 's/__attribute__\(\(optnone\)\)//g; s/__attribute__\(\(optimize\("O0"\)\)\)//g'
-            echo "kpm optnone after:"; grep -rn 'NO_OPTIMIZE\|optnone\|optimize(' drivers/kernelsu/kpm/ | head || true
-          fi
-
-          # SukiSU-Ultra sulog/event.c calls strncpy_from_user_nofault (5.8+ API);
-          # 4.19 lacks it and SukiSU ships no shim -> inject one (prepend to event.c
-          # after pulling uaccess.h). nofault = strncpy_from_user with pagefaults off.
-          if [ -f drivers/kernelsu/sulog/event.c ] && ! grep -q 'ksu419_strncpy_compat' drivers/kernelsu/sulog/event.c; then
-            printf '%s\n' \
-              '/* ksu419_strncpy_compat */' \
-              '#include <linux/version.h>' \
-              '#include <linux/uaccess.h>' \
-              '#if LINUX_VERSION_CODE < KERNEL_VERSION(5,8,0)' \
-              'static inline long strncpy_from_user_nofault(char *dst, const void __user *src, long count) {' \
-              '    long ret; pagefault_disable(); ret = strncpy_from_user(dst, src, count); pagefault_enable(); return ret;' \
-              '}' \
-              '#endif' > /tmp/ev_pre.c
-            cat /tmp/ev_pre.c drivers/kernelsu/sulog/event.c > /tmp/ev.c && mv /tmp/ev.c drivers/kernelsu/sulog/event.c
-            echo "strncpy shim injected into event.c"
-          fi
-
-          # SukiSU-Ultra runtime/ksud.c calls ksu_selinux_hide_handle_* before any
-          # locally appended EOF stubs, causing implicit declaration -> conflicting
-          # types on clang. Use LOCAL static-inline no-op stubs at TOP before first
-          # call. Remove any old broken EOF stub first. Keep KPM enabled.
-          if [ -f drivers/kernelsu/runtime/ksud.c ]; then
-            perl -0777 -i -pe 's/\n\/\* ksu419_selinux_hide_stub \*\/\n#include <linux\/version\.h>\n#if LINUX_VERSION_CODE < KERNEL_VERSION\(6,6,0\)\nvoid ksu_selinux_hide_handle_second_stage\(void\) \{\}\nvoid ksu_selinux_hide_handle_post_fs_data\(void\) \{\}\n#endif\n//s' drivers/kernelsu/runtime/ksud.c
-            if ! grep -q 'ksu419_selinux_hide_stub_top' drivers/kernelsu/runtime/ksud.c; then
-              {
-                printf '%s\n' '/* ksu419_selinux_hide_stub_top */'
-                printf '%s\n' '#include <linux/version.h>'
-                printf '%s\n' '#if LINUX_VERSION_CODE < KERNEL_VERSION(6,6,0)'
-                printf '%s\n' 'static inline void ksu_selinux_hide_handle_second_stage(void) {}'
-                printf '%s\n' 'static inline void ksu_selinux_hide_handle_post_fs_data(void) {}'
-                printf '%s\n\n' '#endif'
-                cat drivers/kernelsu/runtime/ksud.c
-              } > /tmp/ksud_new.c
-              mv /tmp/ksud_new.c drivers/kernelsu/runtime/ksud.c
-              echo "selinux_hide static-inline stubs prepended to ksud.c"
-            fi
-          fi
-
-          # 4.19 non-GKI backports required by SukiSU-Ultra/SUSFS (proven recipe from
-          # larrypaul93/k30s-reference): path_umount + can_umount (5.9+) and
-          # get_cred_rcu. Without these the KSU umount + cred paths fail to link.
-          if ! grep -q "^static int can_umount" fs/namespace.c; then
-            {
-              echo ""
-              echo "/* Backport can_umount for SUSFS/KernelSU (4.19) */"
-              echo "static int can_umount(const struct path *path, int flags)"
-              echo "{"
-              echo "    struct mount *mnt = real_mount(path->mnt);"
-              echo "    if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))"
-              echo "        return -EINVAL;"
-              echo "    if (!may_mount())"
-              echo "        return -EPERM;"
-              echo "    if (path->dentry != path->mnt->mnt_root)"
-              echo "        return -EINVAL;"
-              echo "    if (!check_mnt(mnt))"
-              echo "        return -EINVAL;"
-              echo "    if (mnt->mnt.mnt_flags & MNT_LOCKED)"
-              echo "        return -EINVAL;"
-              echo "    if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))"
-              echo "        return -EPERM;"
-              echo "    return 0;"
-              echo "}"
-            } >> fs/namespace.c
-          fi
-          if ! grep -q "^int path_umount" fs/namespace.c; then
-            {
-              echo ""
-              echo "/* Backport path_umount from Linux 5.9+ for KernelSU/SUSFS */"
-              echo "int path_umount(struct path *path, int flags)"
-              echo "{"
-              echo "    struct mount *mnt = real_mount(path->mnt);"
-              echo "    int ret;"
-              echo "    ret = can_umount(path, flags);"
-              echo "    if (!ret)"
-              echo "        ret = do_umount(mnt, flags);"
-              echo "    dput(path->dentry);"
-              echo "    mntput_no_expire(mnt);"
-              echo "    return ret;"
-              echo "}"
-              echo "EXPORT_SYMBOL(path_umount);"
-            } >> fs/namespace.c
-          fi
-          grep -q "int path_umount" fs/internal.h || sed -i '/^extern void __init mnt_init/a int path_umount(struct path *path, int flags);' fs/internal.h
-          echo 'CFLAGS_namespace.o += -Wno-unused-function' >> fs/Makefile
-          if ! grep -q "get_cred_rcu" include/linux/cred.h; then
-            {
-              echo ""
-              echo "/* Backport get_cred_rcu for KernelSU (4.19) */"
-              echo "static inline const struct cred *get_cred_rcu(const struct cred *cred)"
-              echo "{"
-              echo "    struct cred *nonconst_cred = (struct cred *) cred;"
-              echo "    if (!cred)"
-              echo "        return NULL;"
-              echo "    if (!atomic_inc_not_zero(&nonconst_cred->usage))"
-              echo "        return NULL;"
-              echo "    return cred;"
-              echo "}"
-            } > /tmp/get_cred_rcu.txt
-            LINE=$(grep -n "^static inline void put_cred" include/linux/cred.h | head -1 | cut -d: -f1)
-            if [ -n "$LINE" ]; then
-              head -n $((LINE - 1)) include/linux/cred.h > /tmp/cred_new.h
-              cat /tmp/get_cred_rcu.txt >> /tmp/cred_new.h
-              tail -n +$LINE include/linux/cred.h >> /tmp/cred_new.h
-              mv /tmp/cred_new.h include/linux/cred.h
-            fi
-          fi
-          echo "backports:"; grep -c "path_umount\|get_cred_rcu" fs/namespace.c include/linux/cred.h || true
-
           # clang vs 4.19 legacy: tree promotes several warnings to HARD errors via
           # specific -Werror=<w>. A blanket KCFLAGS=-Wno-error does NOT override a
           # specific -Werror=<w> (only -Wno-error=<w> does). Demote them tree-wide.
@@ -473,59 +303,6 @@ jobs:
 
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
-
-      - name: 🔬 LDST32 symbol diagnostic (on failure)
-        if: failure()
-        shell: bash
-        run: |
-          # Deterministically NAME the symbol behind the
-          # R_AARCH64_LDST32_ABS_LO12_NC alignment error. vmlinux.o (relocatable)
-          # still carries the relocation WITH its target symbol name, unlike the
-          # final link which only prints a raw address.
-          cd "$GITHUB_WORKSPACE/device_kernel/out" || exit 0
-          OD=$(find "$GITHUB_WORKSPACE" -name 'llvm-objdump' 2>/dev/null | head -1)
-          [ -z "$OD" ] && OD=$(command -v llvm-objdump || true)
-          echo "objdump=$OD  vmlinux.o=$(ls -la vmlinux.o 2>/dev/null)"
-          if [ -n "$OD" ] && [ -f vmlinux.o ]; then
-            echo "=== files whose .text holds an LDST32 reloc + the target symbol ==="
-            "$OD" -dr vmlinux.o 2>/dev/null \
-              | grep -E 'R_AARCH64_LDST32_ABS_LO12_NC' \
-              | sed -E 's/.*R_AARCH64_LDST32_ABS_LO12_NC[[:space:]]+//' \
-              | sort | uniq -c | sort -rn | head -40
-          fi
-
-      - name: 📦 Collect debug bundle
-        if: always()
-        shell: bash
-        run: |
-          cd "$GITHUB_WORKSPACE/device_kernel"
-          mkdir -p debug_bundle
-          cp -a "$GITHUB_WORKSPACE/.github" debug_bundle/github_workflows 2>/dev/null || true
-          for f in \
-            error.log full_build.log build.log \
-            drivers/kernelsu/runtime/ksud.c \
-            drivers/kernelsu/Kbuild \
-            drivers/kernelsu/kernel/Kbuild \
-            drivers/kernelsu/sulog/event.c \
-            drivers/kernelsu/kpm/kpm.c \
-            fs/namespace.c fs/namei.c fs/internal.h fs/Makefile \
-            include/linux/cred.h include/linux/uaccess.h include/linux/proc_fs.h include/linux/compiler.h include/linux/jump_label.h \
-            mm/maccess.c fs/stat.c arch/arm64/include/asm/cacheflush.h out/System.map out/vmlinux.o out/.tmp_vmlinux1 \
-            arch/arm64/configs/${{ env.DEFCONFIG_NAME }} out/.config
-          do
-            if [ -f "$f" ]; then
-              mkdir -p "debug_bundle/$(dirname "$f")"
-              cp "$f" "debug_bundle/$f"
-            fi
-          done
-          zip -r debug_bundle.zip debug_bundle
-
-      - name: ⬆️ Upload debug bundle
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug_bundle
-          path: device_kernel/debug_bundle.zip
 
       - name: 🧹 Drop empty built DTB (reuse stock boot.img DTB)
         shell: bash
