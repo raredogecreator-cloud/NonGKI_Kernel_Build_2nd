@@ -29,15 +29,15 @@ env:
   GCC_32_BRANCH : "arm32"
 
   DEFCONFIG_SOURCE: ""
-  # The tree's OWN proven defconfig: Rohail33's build_kernel.sh sets
-  # KERNEL_DEFCONFIG=vendor/kona-perf_defconfig -- this is what the author
-  # actually builds & boots on OP8 (OPKona). It's the only config here with
-  # CONFIG_CPUSET_ASSIST=y, so it compiles clean. (oplus-stock_defconfig was
-  # the wrong guess: never built by the author -> has an unguarded-cpuset
-  # compile bug. And this is the correct application of the A11 "use the
-  # kernel's OWN defconfig" lesson -- there it meant radioactive_defconfig,
-  # here it means kona-perf, NOT oplus-stock.)
-  DEFCONFIG_NAME : "vendor/kona-perf_defconfig"
+  # DEVICE-MATCHED stock config. kona-perf_defconfig (Rohail's generic OP8 config,
+  # used by his custom-ROM community) COMPILED and PACKED fine but EARLY-PANICKED
+  # on STOCK OOS13 (no adb at all, black screen) -- generic config lacks the
+  # OnePlus vendor early-boot bits (regulators/clocks/UFS/display) stock OOS needs.
+  # oplus-stock_defconfig is the OnePlus-extracted stock config (closest to the
+  # kernel actually booting on the device). It originally had an unguarded-cpuset
+  # compile bug, but the Toolchain compat fixes step now SOURCE-PATCHES that
+  # (#ifdef guard), so it compiles.
+  DEFCONFIG_NAME : "vendor/oplus-stock_defconfig"
   DEFCONFIG_ORIGIN_IMAGE: ""
   DEFCONFIG_FROM_BOOT: false
 
