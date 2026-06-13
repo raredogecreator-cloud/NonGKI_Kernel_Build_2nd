@@ -51,13 +51,11 @@ env:
   KERNELSU_AUTO_GET : "true"
   KERNELSU_AUTO_FORK : "resukisu"
 
-  # STEP 1 (this build): SUSFS OFF. The opkona tree's drivers/Makefile
-  # unconditionally references drivers/ksu/, so KSU_INSTALL must be on
-  # (auto-fetches ReSukiSU) just to make the tree buildable. SUSFS gets
-  # layered in step 2 -> confirm this boots via `fastboot boot` first,
-  # same as the A11 sequence.
+  # STEP 2: KSU bare-boot PASSED on Meteoric oos+kona-perf (4.19.282-Meteoric
+  # booted, root works, all 13 modules loaded). Now enable SUSFS + KPM-inline to
+  # match the proven A11 config (SUSFS_ENABLE/KPM_ENABLE/KPM_INLINE all true).
   KSU_INSTALL : "true"
-  SUSFS_ENABLE : false
+  SUSFS_ENABLE : true
   SUSFS_FIXED : true
 
   AK3_SOURCE : "https://github.com/JackA1ltman/OP8_AnyKernel3.git"
@@ -92,8 +90,10 @@ env:
 
   KERNEL_PATCH: "false"
 
-  KPM_ENABLE: "false"
-  KPM_INLINE: "false"
+  # Match A11 proven config: KPM + inline-hook support (this is the "inline" the
+  # manager showed on A11; HOOK_METHOD stays syscall like A11).
+  KPM_ENABLE: "true"
+  KPM_INLINE: "true"
   KPM_KPATCH_NEXT: "false"
   KPM_PATCH_SOURCE: "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/refs/heads/main/kpm/patch_linux"
 
