@@ -121,14 +121,15 @@ runs:
                     KERNELSU_BRANCH="main"
                 fi
             elif [[ "${{ env.KERNELSU_AUTO_FORK }}" == "sukisu" ]]; then
+                # OFFICIAL SukiSU-Ultra (builtin). Pinned to a known-good commit by a
+                # later workflow step; the 4.19/non-GKI compat (access_ok arity,
+                # strncpy_from_user_nofault, selinux_hide stubs, path_umount/get_cred_rcu)
+                # is applied as our OWN local patchset in the Toolchain compat fixes
+                # step -- so we don't depend on any third-party fork staying alive.
                 KERNELSU_AUTHOR="SukiSU-Ultra"
                 KERNELSU_NAME="SukiSU-Ultra"
                 KERNELSU_ORIGIN_BRANCH="main"
-                if [[ "${{ env.SUSFS_ENABLE }}" == "true" ]]; then
-                    KERNELSU_BRANCH="builtin"
-                else
-                    KERNELSU_BRANCH="builtin"
-                fi
+                KERNELSU_BRANCH="builtin"
             elif [[ "${{ env.KERNELSU_AUTO_FORK }}" == "next" ]]; then
                 KERNELSU_AUTHOR="KernelSU-Next"
                 KERNELSU_NAME="KernelSU-Next"
