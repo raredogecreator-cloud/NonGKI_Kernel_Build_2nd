@@ -225,8 +225,12 @@ jobs:
           # wrong relocations and must NOT be flashed.
           if [ -f scripts/link-vmlinux.sh ] && ! grep -q ODDSYM_DIAG scripts/link-vmlinux.sh; then
             sed -i 's/${LDFLAGS_vmlinux} -o ${2}/${LDFLAGS_vmlinux} --noinhibit-exec -o ${2}/' scripts/link-vmlinux.sh
-            sed -i '/vmlinux_link "" .tmp_vmlinux1/a echo "=== ODDSYM_DIAG_START ==="; ${NM} -n .tmp_vmlinux1 2>/dev/null | grep -iE "^ffffff800ac10[0-9a-f]{3} " ; echo "--- 64K context (head) ---"; ${NM} -n .tmp_vmlinux1 2>/dev/null | grep -iE "^ffffff800ac1[0-9a-f]{4} " | head -80 ; echo "=== ODDSYM_DIAG_END ==="' scripts/link-vmlinux.sh
-            echo "oddsym diag injected:"; grep -n 'ODDSYM_DIAG\|noinhibit-exec' scripts/link-vmlinux.sh || true
+            # link-vmlinux.sh runs under set -e; lld still exits non-zero even with
+            # --noinhibit-exec, aborting the script before the dump. Append || true to
+            # the link command so the script survives and our nm dump runs.
+            sed -i 's|-T ${lds} ${objects}|-T ${lds} ${objects} || true|' scripts/link-vmlinux.sh
+            sed -i '/vmlinux_link "" .tmp_vmlinux1/a echo "=== ODDSYM_DIAG_START ==="; ls -la .tmp_vmlinux1 2>/dev/null || echo "NO .tmp_vmlinux1 produced"; ${NM} -n .tmp_vmlinux1 2>/dev/null | grep -iE "^ffffff800ac10[0-9a-f]{3} " ; echo "--- 64K context (head) ---"; ${NM} -n .tmp_vmlinux1 2>/dev/null | grep -iE "^ffffff800ac1[0-9a-f]{4} " | head -80 ; echo "=== ODDSYM_DIAG_END ==="' scripts/link-vmlinux.sh
+            echo "oddsym diag injected:"; grep -n 'ODDSYM_DIAG\|noinhibit-exec\|objects} || true' scripts/link-vmlinux.sh || true
           fi
 
           # WireGuard: net/Kconfig may `source net/wireguard/Kconfig` from a
